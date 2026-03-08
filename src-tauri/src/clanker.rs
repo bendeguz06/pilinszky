@@ -19,14 +19,15 @@ struct ChatResponse {
     message: Message,
 }
 
-async fn clankery() -> Result<(), Box<dyn std::error::Error>> {
+#[tauri::command]
+pub async fn clankery(prompt: String) -> Result<String, String> {
     let client = Client::new();
 
     let req = ChatRequest {
         model: "qwen2.5:0.5b".to_string(),
         messages: vec![Message {
             role: "user".to_string(),
-            content: "explain the daoist concept of wu wei in 1 sentence!".to_string(),
+            content: prompt,
         }],
         stream: false,
     };
@@ -35,11 +36,13 @@ async fn clankery() -> Result<(), Box<dyn std::error::Error>> {
         .post("http://localhost:11434/api/chat")
         .json(&req)
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .map_err(|e| e.to_string())? // Convert reqwest errors to String
+        .error_for_status()
+        .map_err(|e| e.to_string())? // Convert status errors to String
         .json::<ChatResponse>()
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?; // Convert serde_json errors to String
 
-    println!("{}", res.message.content);
-    Ok(())
+    Ok(res.message.content)
 }
