@@ -8,7 +8,9 @@ function App() {
 
   async function handleClankery() {
     try {
-      const response = await invoke<string>("clankery", { prompt: clankeryPrompt });
+      const response = await invoke<string>("clankery", {
+        prompt: clankeryPrompt,
+      });
       setClankeryResponse(response);
       setClankeryPrompt("");
     } catch (error) {
@@ -18,8 +20,8 @@ function App() {
 
   return (
     <main className="app-container">
-      {clankeryResponse && <div className="response">{clankeryResponse}</div>}
-      
+      <div className="response">{clankeryResponse}</div>
+
       <div className="input-section">
         <input
           id="clankery-input"
