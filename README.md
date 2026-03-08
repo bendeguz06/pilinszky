@@ -1,12 +1,10 @@
 # Pilinszky
 
-A Tauri + React + TypeScript desktop application that integrates with Ollama for local AI interactions.
-
 ## Setup
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) and [Bun](https://bun.sh/)
+- [Bun](https://bun.sh/)
 - [Rust](https://www.rust-lang.org/)
 - [Tauri CLI](https://tauri.app/)
 - [Ollama](https://ollama.ai/)
