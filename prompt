@@ -1,0 +1,15 @@
+Create a web scraper at `backend/scrape_corpus.py` that scrapes all of Pilinszky János's poems from the DIA digital library.
+
+Table of contents page: https://konyvtar.dia.hu/html/muvek/PILINSZKY/pilinszky00001_tart.html
+
+Requirements:
+- Use requests + BeautifulSoup4
+- Parse all <a href> links from the TOC page that point to poem subpages (links starting with "pilinszky")
+- For each linked page: fetch it, extract clean plain text (no HTML tags, no navigation cruft, no page metadata), prepend the poem title as a plain text header followed by two newlines, no markdown syntax
+- Sleep 0.5s between requests
+- Save everything into a single file: backend/corpus/versek.txt, UTF-8 encoded
+- Create backend/corpus/ directory if it doesn't exist
+- Print ✓ title for each success, ✗ href: error for failures
+- The encoding of the source pages is iso-8859-2 (Hungarian latin), make sure to handle this correctly — detect or force the right encoding before parsing
+
+Do not touch any other files. Add beautifulsoup4 to backend/requirements.txt if it isn't already there.

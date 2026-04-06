@@ -5,18 +5,29 @@ import tempfile
 
 import chromadb
 import requests
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
-from TTS.api import TTS
+from TTS.api import TTS  # new repo: https://github.com/idiap/coqui-ai-TTS
 
-OLLAMA_URL = "http://localhost:11434"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db")
+VOICE_SAMPLES_DIR = os.path.join(BASE_DIR, "voice_samples")
+
+
+@app.on_event("startup")
+async def startup():
+    get_tts()  # load XTTS into VRAM at boot
+    get_collection()  # also warm up ChromaDB connection
+
+
+OLLAMA_URL = OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "pilinszky_corpus"
 VOICE_SAMPLES_DIR = "./voice_samples"
 LLM_MODEL = "jobautomation/OpenEuroLLM-Hungarian:latest"
 EMBED_MODEL = "nomic-embed-text"
-TOP_K = 4
+TOP_K = 6
 
 SYSTEM_PROMPT = (
     "Te Pilinszky János vagy, a 20. századi magyar költő. "
@@ -31,6 +42,7 @@ app = FastAPI()
 # ChromaDB client (lazy-initialised on first request)
 _chroma_collection = None
 
+
 def get_collection():
     global _chroma_collection
     if _chroma_collection is None:
@@ -38,13 +50,15 @@ def get_collection():
         _chroma_collection = client.get_collection(COLLECTION_NAME)
     return _chroma_collection
 
+
 # XTTS model (loaded once at startup)
 _tts: TTS | None = None
+
 
 def get_tts() -> TTS:
     global _tts
     if _tts is None:
-        _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
+        _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to("cuda")
     return _tts
 
 
@@ -52,9 +66,11 @@ class Message(BaseModel):
     role: str
     content: str
 
+
 class ChatRequest(BaseModel):
     message: str
     history: list[Message] = []
+
 
 class TTSRequest(BaseModel):
     text: str
@@ -62,12 +78,12 @@ class TTSRequest(BaseModel):
 
 def embed(text: str) -> list[float]:
     res = requests.post(
-        f"{OLLAMA_URL}/api/embeddings",
-        json={"model": EMBED_MODEL, "prompt": text},
+        f"{OLLAMA_URL}/api/embed",
+        json={"model": EMBED_MODEL, "input": text},
         timeout=30,
     )
     res.raise_for_status()
-    return res.json()["embedding"]
+    return res.json()["embeddings"][0]
 
 
 @app.post("/chat")
@@ -75,9 +91,22 @@ def chat(req: ChatRequest):
     # Retrieve relevant context from ChromaDB
     query_embedding = embed(req.message)
     collection = get_collection()
-    results = collection.query(query_embeddings=[query_embedding], n_results=TOP_K)
-    context_chunks = results["documents"][0] if results["documents"] else []
-    context_text = "\n\n".join(context_chunks)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=TOP_K,
+        include=["documents", "metadatas"],
+    )
+    docs = results["documents"][0] if results["documents"] else []
+    metas = results["metadatas"][0] if results["metadatas"] else [{}] * len(docs)
+    context_parts = []
+    for doc, meta in zip(docs, metas):
+        typ = meta.get("type", "")
+        title = meta.get("title", "")
+        label = (
+            f"[{typ.upper()}: {title}]" if title else f"[{typ.upper()}]" if typ else ""
+        )
+        context_parts.append(f"{label}\n{doc}" if label else doc)
+    context_text = "\n\n".join(context_parts)
 
     # Build message list for Ollama
     system_content = SYSTEM_PROMPT
