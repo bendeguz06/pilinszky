@@ -2,41 +2,176 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Electron</title>
-    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <title>Pilinszky János</title>
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:"
     />
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    <link href="./assets/main.css" type="text/css" rel="stylesheet" />
+      body {
+        background: #171614;
+        color: #d4cfc9;
+        font-family: 'Georgia', serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        overflow: hidden;
+      }
+
+      #header {
+        padding: 2rem 0 1rem;
+        text-align: center;
+        flex-shrink: 0;
+      }
+
+      #header h1 {
+        font-size: 1.6rem;
+        font-weight: normal;
+        letter-spacing: 0.15em;
+        color: #e8e3dc;
+      }
+
+      #subtitle {
+        margin-top: 0.4rem;
+        font-size: 0.85rem;
+        color: #7a7570;
+        letter-spacing: 0.05em;
+        transition: opacity 0.6s ease;
+      }
+
+      #messages {
+        flex: 1;
+        width: 100%;
+        max-width: 720px;
+        overflow-y: auto;
+        padding: 1rem 1.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 1.2rem;
+      }
+
+      .msg {
+        max-width: 80%;
+        line-height: 1.65;
+        font-size: 0.95rem;
+      }
+
+      .msg.user {
+        align-self: flex-end;
+        color: #9a9490;
+        font-style: italic;
+      }
+
+      .msg.assistant {
+        align-self: flex-start;
+        color: #e8e3dc;
+      }
+
+      #input-bar {
+        flex-shrink: 0;
+        width: 100%;
+        max-width: 720px;
+        display: flex;
+        gap: 0.6rem;
+        padding: 1rem 1.5rem 2rem;
+      }
+
+      #input {
+        flex: 1;
+        background: #252320;
+        border: 1px solid #3a3733;
+        border-radius: 4px;
+        color: #d4cfc9;
+        font-family: inherit;
+        font-size: 0.95rem;
+        padding: 0.65rem 0.9rem;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+
+      #input:focus { border-color: #6a6560; }
+
+      #send {
+        background: #252320;
+        border: 1px solid #3a3733;
+        border-radius: 4px;
+        color: #9a9490;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 0.9rem;
+        padding: 0.65rem 1.1rem;
+        transition: border-color 0.2s, color 0.2s;
+      }
+
+      #send:hover { border-color: #6a6560; color: #d4cfc9; }
+      #send:disabled { opacity: 0.4; cursor: default; }
+    </style>
   </head>
-
   <body>
-    <div id="app">
-      <img alt="logo" class="logo" src="./assets/electron.svg" />
-      <div class="creator">Powered by electron-vite</div>
-      <div class="text">
-        Build an Electron app with
-        <span class="ts">TypeScript</span>
-      </div>
-      <p class="tip">Please try pressing <code>F12</code> to open the devTool</p>
-      <div class="actions">
-        <div class="action">
-          <a href="https://electron-vite.org/" target="_blank" rel="noreferrer">Documentation</a>
-        </div>
-        <div class="action">
-          <a id="ipcHandler" target="_blank" rel="noreferrer">Send IPC</a>
-        </div>
-      </div>
-
-      <ul class="versions">
-        <li class="electron-version"></li>
-        <li class="chrome-version"></li>
-        <li class="node-version"></li>
-      </ul>
+    <div id="header">
+      <h1>Pilinszky János</h1>
+      <p id="subtitle">Az avatár betöltése folyamatban...</p>
     </div>
 
-    <script type="module" src="./src/renderer.ts"></script>
+    <div id="messages"></div>
+
+    <div id="input-bar">
+      <input id="input" type="text" placeholder="Írjon üzenetet..." autocomplete="off" />
+      <button id="send">Küldés</button>
+    </div>
+
+    <script>
+      const history = []
+      const messagesEl = document.getElementById('messages')
+      const inputEl = document.getElementById('input')
+      const sendBtn = document.getElementById('send')
+      const subtitleEl = document.getElementById('subtitle')
+      let subtitleHidden = false
+
+      function appendMessage(role, text) {
+        const el = document.createElement('div')
+        el.className = 'msg ' + role
+        el.textContent = text
+        messagesEl.appendChild(el)
+        messagesEl.scrollTop = messagesEl.scrollHeight
+      }
+
+      async function send() {
+        const message = inputEl.value.trim()
+        if (!message) return
+
+        if (!subtitleHidden) {
+          subtitleEl.style.opacity = '0'
+          subtitleHidden = true
+        }
+
+        inputEl.value = ''
+        sendBtn.disabled = true
+        appendMessage('user', message)
+        history.push({ role: 'user', content: message })
+
+        try {
+          const reply = await window.pilinszky.chat(message, history)
+          history.push({ role: 'assistant', content: reply })
+          appendMessage('assistant', reply)
+
+          const audioSrc = await window.pilinszky.speak(reply)
+          const audio = new Audio(audioSrc)
+          audio.play()
+        } catch (err) {
+          appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
+          console.error(err)
+        } finally {
+          sendBtn.disabled = false
+          inputEl.focus()
+        }
+      }
+
+      sendBtn.addEventListener('click', send)
+      inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') send() })
+    </script>
   </body>
 </html>

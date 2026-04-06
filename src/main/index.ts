@@ -5,8 +5,10 @@ import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
 import { autoUpdater } from 'electron-updater'
 import type { Message } from '../../src/shared/types'
+import * as dotenv from 'dotenv'
+dotenv.config()
 
-const POD_URL = '' //cloudfare tunnel maybe?
+const POD_URL = process.env.POD_URL
 
 function createWindow(): void {
   // Create the browser window.
