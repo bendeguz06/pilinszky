@@ -1,0 +1,152 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #171614;
+  color: #d4cfc9;
+  font-family: 'Georgia', serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#header {
+  padding: 2rem 1.5rem 1rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+#header h1 {
+  font-size: 1.6rem;
+  font-weight: normal;
+  letter-spacing: 0.15em;
+  color: #e8e3dc;
+}
+
+#subtitle {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  color: #7a7570;
+  letter-spacing: 0.05em;
+  transition: opacity 0.6s ease;
+}
+
+#content {
+  flex: 1;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 1rem;
+  min-height: 0;
+  padding: 0 1.5rem;
+}
+
+#history-panel {
+  background: #1d1b19;
+  border: 1px solid #2d2a26;
+  border-radius: 8px;
+  min-height: 0;
+}
+
+#messages {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+#canvas-panel {
+  background: #1d1b19;
+  border: 1px solid #2d2a26;
+  border-radius: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#avatar-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.msg {
+  max-width: 80%;
+  line-height: 1.65;
+  font-size: 0.95rem;
+}
+
+.msg.user {
+  align-self: flex-end;
+  color: #9a9490;
+  font-style: italic;
+}
+
+.msg.assistant {
+  align-self: flex-start;
+  color: #e8e3dc;
+}
+
+#input-bar {
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  gap: 0.6rem;
+  padding: 1rem 1.5rem 2rem;
+}
+
+#input {
+  flex: 1;
+  background: #252320;
+  border: 1px solid #3a3733;
+  border-radius: 4px;
+  color: #d4cfc9;
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 0.65rem 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+#input:focus { border-color: #6a6560; }
+
+#send {
+  background: #252320;
+  border: 1px solid #3a3733;
+  border-radius: 4px;
+  color: #9a9490;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9rem;
+  padding: 0.65rem 1.1rem;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+#send:hover { border-color: #6a6560; color: #d4cfc9; }
+#send:disabled { opacity: 0.4; cursor: default; }
+
+@media (max-width: 900px) {
+  #content {
+    grid-template-columns: 220px 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  #content {
+    grid-template-columns: 1fr;
+  }
+
+  #history-panel {
+    max-height: 180px;
+  }
+}
+
+body.prod-layout #content {
+  grid-template-columns: 1fr;
+}
+
+body.prod-layout #history-panel {
+  display: none;
+}
+
