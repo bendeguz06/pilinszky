@@ -2,5 +2,7 @@ fastapi
 uvicorn
 chromadb
 requests
-TTS
-torch
+coqui-tts
+torch==2.3.1+cu121
+torchaudio==2.3.1+cu121
+--extra-index-url https://download.pytorch.org/whl/cu121

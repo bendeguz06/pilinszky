@@ -15,12 +15,6 @@ CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db")
 VOICE_SAMPLES_DIR = os.path.join(BASE_DIR, "voice_samples")
 
 
-@app.on_event("startup")
-async def startup():
-    get_tts()  # load XTTS into VRAM at boot
-    get_collection()  # also warm up ChromaDB connection
-
-
 OLLAMA_URL = OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "pilinszky_corpus"
@@ -38,6 +32,13 @@ SYSTEM_PROMPT = (
 )
 
 app = FastAPI()
+
+
+@app.on_event("startup")
+async def startup():
+    get_tts()  # load XTTS into VRAM at boot
+    get_collection()  # also warm up ChromaDB connection
+
 
 # ChromaDB client (lazy-initialised on first request)
 _chroma_collection = None
