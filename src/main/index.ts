@@ -1,30 +1,40 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import axios from 'axios'
+import { autoUpdater } from 'electron-updater'
+import type { Message } from '../../src/shared/types'
+
+const POD_URL = '' //cloudfare tunnel maybe?
 
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    fullscreen: true,
+    kiosk: true,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      contextIsolation: true // renderer can't access Node, don't remove.
     }
   })
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
   })
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+  mainWindow.webContents.setWindowOpenHandler(() => {
     return { action: 'deny' }
-  })
+  }) // no need for shell.openExternal in a kiosk
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -42,6 +52,8 @@ app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
+  autoUpdater.checkForUpdatesAndNotify()
+
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
@@ -49,8 +61,23 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
+  ipcMain.handle('chat', async (_, payload: { message: string; history: Message[] }) => {
+    const res = await axios.post(`${POD_URL}/chat`, payload)
+    return res.data.reply as string
+  })
+
+  // Get TTS audio → return as base64 so renderer can play it
+  ipcMain.handle('speak', async (_, text: string) => {
+    const res = await axios.post(
+      `${POD_URL}/tts`,
+      { text },
+      {
+        responseType: 'arraybuffer'
+      }
+    )
+    const base64 = Buffer.from(res.data).toString('base64')
+    return `data:audio/wav;base64,${base64}`
+  })
 
   createWindow()
 
