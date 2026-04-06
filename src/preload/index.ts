@@ -1,5 +1,6 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { Message } from '../../src/shared/types'
 
 // Custom APIs for renderer
 const api = {}
@@ -20,3 +21,9 @@ if (process.contextIsolated) {
   // @ts-ignore (define in dts)
   window.api = api
 }
+
+contextBridge.exposeInMainWorld('pilinszky', {
+  chat: (message: string, history: Message[]) => ipcRenderer.invoke('chat', { message, history }),
+
+  speak: (text: string) => ipcRenderer.invoke('speak', text)
+})
