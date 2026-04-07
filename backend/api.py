@@ -138,8 +138,9 @@ def chat(req: ChatRequest):
 def tts(req: TTSRequest):
     tts_model, gpt_cond_latent, speaker_embedding = get_tts()
 
+    text = req.text.replace("\n", " ").strip()
     out = tts_model.synthesizer.tts_model.inference(
-        text=req.text,
+        text=text,
         language="hu",
         gpt_cond_latent=gpt_cond_latent,
         speaker_embedding=speaker_embedding,
