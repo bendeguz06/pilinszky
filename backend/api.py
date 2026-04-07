@@ -1,11 +1,12 @@
 import glob
-import io
 import os
 import tempfile
 
 import chromadb
 import requests
-from fastapi import Depends, FastAPI, Header, HTTPException
+import torch
+import torchaudio
+from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
 from TTS.api import TTS  # new repo: https://github.com/idiap/coqui-ai-TTS
@@ -14,11 +15,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db")
 VOICE_SAMPLES_DIR = os.path.join(BASE_DIR, "voice_samples")
 
-
-OLLAMA_URL = OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-CHROMA_PATH = "./chroma_db"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 COLLECTION_NAME = "pilinszky_corpus"
-VOICE_SAMPLES_DIR = "./voice_samples"
 LLM_MODEL = "jobautomation/OpenEuroLLM-Hungarian:latest"
 EMBED_MODEL = "nomic-embed-text"
 TOP_K = 3
@@ -33,33 +31,43 @@ SYSTEM_PROMPT = (
 
 app = FastAPI()
 
-
-@app.on_event("startup")
-async def startup():
-    get_collection()  # warm up ChromaDB connection
-
-
-# ChromaDB client (lazy-initialised on first request)
+# ChromaDB client
 _chroma_collection = None
+
+# XTTS model + cached speaker latents
+_tts: TTS | None = None
+_gpt_cond_latent = None
+_speaker_embedding = None
 
 
 def get_collection():
     global _chroma_collection
     if _chroma_collection is None:
-        client = chromadb.PersistentClient(path=CHROMA_PATH)
+        client = chromadb.PersistentClient(path=str(CHROMA_PATH))
         _chroma_collection = client.get_collection(COLLECTION_NAME)
     return _chroma_collection
 
 
-# XTTS model (loaded once at startup)
-_tts: TTS | None = None
-
-
-def get_tts() -> TTS:
-    global _tts
+def get_tts():
+    global _tts, _gpt_cond_latent, _speaker_embedding
     if _tts is None:
         _tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to("cuda")
-    return _tts
+        speaker_wavs = glob.glob(os.path.join(VOICE_SAMPLES_DIR, "*.wav"))
+        if not speaker_wavs:
+            raise RuntimeError(f"No .wav files found in {VOICE_SAMPLES_DIR}")
+        # Precompute and cache speaker conditioning latents
+        _gpt_cond_latent, _speaker_embedding = _tts.synthesizer.tts_model.get_conditioning_latents(
+            audio_path=speaker_wavs,
+            gpt_cond_len=30,
+            max_ref_length=60,
+        )
+    return _tts, _gpt_cond_latent, _speaker_embedding
+
+
+@app.on_event("startup")
+async def startup():
+    get_collection()
+    get_tts()  # preload XTTS and cache speaker latents
 
 
 class Message(BaseModel):
@@ -88,7 +96,6 @@ def embed(text: str) -> list[float]:
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    # Retrieve relevant context from ChromaDB
     query_embedding = embed(req.message)
     collection = get_collection()
     results = collection.query(
@@ -108,7 +115,6 @@ def chat(req: ChatRequest):
         context_parts.append(f"{label}\n{doc}" if label else doc)
     context_text = "\n\n".join(context_parts)
 
-    # Build message list for Ollama
     system_content = SYSTEM_PROMPT
     if context_text:
         system_content += f"\n\nReleváns részletek saját írásaidból:\n{context_text}"
@@ -130,22 +136,20 @@ def chat(req: ChatRequest):
 
 @app.post("/tts")
 def tts(req: TTSRequest):
-    speaker_wavs = glob.glob(os.path.join(VOICE_SAMPLES_DIR, "*.wav"))
-    if not speaker_wavs:
-        raise RuntimeError(f"No .wav files found in {VOICE_SAMPLES_DIR}")
+    tts_model, gpt_cond_latent, speaker_embedding = get_tts()
 
-    tts_model = get_tts()
+    out = tts_model.synthesizer.tts_model.inference(
+        text=req.text,
+        language="hu",
+        gpt_cond_latent=gpt_cond_latent,
+        speaker_embedding=speaker_embedding,
+    )
+    wav = torch.tensor(out["wav"]).unsqueeze(0)
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_path = tmp.name
-
     try:
-        tts_model.tts_to_file(
-            text=req.text,
-            language="hu",
-            speaker_wav=speaker_wavs,
-            file_path=tmp_path,
-        )
+        torchaudio.save(tmp_path, wav, 24000)
         with open(tmp_path, "rb") as f:
             wav_bytes = f.read()
     finally:
