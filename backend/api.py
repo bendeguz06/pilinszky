@@ -21,7 +21,7 @@ COLLECTION_NAME = "pilinszky_corpus"
 VOICE_SAMPLES_DIR = "./voice_samples"
 LLM_MODEL = "jobautomation/OpenEuroLLM-Hungarian:latest"
 EMBED_MODEL = "nomic-embed-text"
-TOP_K = 6
+TOP_K = 3
 
 SYSTEM_PROMPT = (
     "Te Pilinszky János vagy, a 20. századi magyar költő. "
@@ -36,8 +36,7 @@ app = FastAPI()
 
 @app.on_event("startup")
 async def startup():
-    get_tts()  # load XTTS into VRAM at boot
-    get_collection()  # also warm up ChromaDB connection
+    get_collection()  # warm up ChromaDB connection
 
 
 # ChromaDB client (lazy-initialised on first request)
@@ -121,7 +120,7 @@ def chat(req: ChatRequest):
 
     res = requests.post(
         f"{OLLAMA_URL}/api/chat",
-        json={"model": LLM_MODEL, "messages": messages, "stream": False},
+        json={"model": LLM_MODEL, "messages": messages, "stream": False, "options": {"num_ctx": 2048, "num_gpu": 49}},
         timeout=120,
     )
     res.raise_for_status()
