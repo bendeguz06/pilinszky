@@ -17,13 +17,6 @@ if (!isDev) {
   document.body.classList.add("prod-layout");
 }
 
-function paintAvatarCanvas() {
-  const ctx = avatarCanvasEl.getContext('2d');
-  if (!ctx) return;
-
-
-}
-
 function appendMessage(role: string, text: string) {
   const el = document.createElement('div')
   el.className = 'msg ' + role
@@ -61,13 +54,9 @@ async function send() {
 sendBtn.addEventListener('click', send)
 inputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') send().then(null);
-})
-
-paintAvatarCanvas()
-window.addEventListener('resize', paintAvatarCanvas)
+});
 
 // update the mouse position (absolute position relative to dom)
-
 document.addEventListener("mousemove", (event) => {
   const mouseX = event.clientX;
   const mouseY = event.clientY;
