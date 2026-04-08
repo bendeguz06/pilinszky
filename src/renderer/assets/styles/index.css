@@ -92,8 +92,120 @@ body {
   flex-shrink: 0;
   width: 100%;
   display: flex;
+  align-items: center;
   gap: 0.6rem;
   padding: 1rem 1.5rem 2rem;
+}
+
+#mic-button {
+  width: 2.5rem;
+  height: 2.3rem;
+  flex-shrink: 0;
+  background: #252320;
+  border: 1px solid #3a3733;
+  border-radius: 4px;
+  color: #9a9490;
+  cursor: pointer;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.2s, color 0.2s, background-color 0.2s;
+}
+
+#mic-button:hover {
+  border-color: #6a6560;
+  color: #d4cfc9;
+}
+
+#mic-icon {
+  width: 1rem;
+  height: 1rem;
+  fill: currentColor;
+}
+
+#mic-indicator {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: #7a7570;
+}
+
+#mic-button[data-state='active'] {
+  border-color: #5f8166;
+  color: #b9ddc1;
+}
+
+#mic-button[data-state='active'] #mic-indicator {
+  background: #63b374;
+}
+
+#mic-button[data-state='blocked'] {
+  border-color: #8f4c4c;
+  color: #d9aaaa;
+}
+
+#mic-button[data-state='blocked'] #mic-indicator {
+  background: #cf5b5b;
+}
+
+#mic-button[data-state='unsupported'] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.mic-picker {
+  position: fixed;
+  z-index: 20;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 16px));
+  background: #1f1d1a;
+  border: 1px solid #3a3733;
+  border-radius: 6px;
+  padding: 0.5rem;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.mic-picker-title {
+  color: #b6b1ab;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  margin: 0 0 0.45rem 0.1rem;
+}
+
+.mic-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.mic-picker-option {
+  width: 100%;
+  text-align: left;
+  background: #252320;
+  border: 1px solid #3a3733;
+  border-radius: 4px;
+  color: #d4cfc9;
+  padding: 0.45rem 0.55rem;
+  font-family: inherit;
+  font-size: 0.86rem;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.mic-picker-option:hover,
+.mic-picker-option:focus-visible {
+  border-color: #6a6560;
+  background: #2b2824;
+  outline: none;
+}
+
+.mic-picker-option[data-selected='true'] {
+  border-color: #5f8166;
+  background: #273128;
 }
 
 #input {
