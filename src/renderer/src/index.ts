@@ -1,8 +1,7 @@
 import { type Message } from "../../shared/types";
 import { AvatarRenderer } from './avatar'
 
-// @ts-ignore
-const isDev: boolean = import.meta.env.DEV;
+const isDev = import.meta.env.DEV;
 
 const history: Message[] = [];
 
@@ -62,7 +61,6 @@ document.addEventListener("mousemove", (event) => {
   const mouseY = event.clientY;
 
   avatar.updateMouse(mouseX, mouseY);
-})
-
+});
 
 export {};

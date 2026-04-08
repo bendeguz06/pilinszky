@@ -1,7 +1,10 @@
-type Character = "pilinszky";
+type Character = string;
 type PositionType = "lbeye" | "leye" | "leyeCenter" | "reye" | "rbeye" | "reyeCenter";
+type AvatarPart = "head" | "leye" | "lbeye" | "reye" | "rbeye";
 
-const positions: Record<Character, {
+const avatarParts = <const>["head", "leye", "lbeye", "reye", "rbeye"];
+
+const positions: Record<string, {
   [key in PositionType]: [number, number]
 }> = {
   "pilinszky": {
@@ -12,6 +15,34 @@ const positions: Record<Character, {
     reyeCenter: [131, 130],
     rbeye: [115, 128]
   }
+}
+
+const avatarModules = import.meta.glob('../assets/avatar/*.png', {
+  eager: true,
+  import: 'default'
+}) as Record<string, string>;
+
+const avatarCatalog: Record<string, Partial<Record<AvatarPart, string>>> = {};
+
+for (const [path, url] of Object.entries(avatarModules)) {
+  const fileName = path.split('/').pop();
+  if (!fileName) {
+    continue;
+  }
+
+  const match = fileName.match(/^(.+?)_(head|leye|lbeye|reye|rbeye)\.png$/i);
+  if (!match) {
+    continue;
+  }
+
+  const character = match[1];
+  const part = match[2] as AvatarPart;
+
+  if (!avatarCatalog[character]) {
+    avatarCatalog[character] = {};
+  }
+
+  avatarCatalog[character][part] = url;
 }
 
 async function loadImage(src: string): Promise<HTMLImageElement> {
@@ -45,11 +76,13 @@ export class AvatarRenderer {
   blinkChance: number = 0.25;
 
   // images
-  headImage: HTMLImageElement | null = null;
-  lbeyeImage: HTMLImageElement | null = null;
-  leyeImage: HTMLImageElement | null = null;
-  rbeyeImage: HTMLImageElement | null = null;
-  reyeImage: HTMLImageElement | null = null;
+  images: Record<AvatarPart, HTMLImageElement | null> = {
+    head: null,
+    lbeye: null,
+    leye: null,
+    rbeye: null,
+    reye: null
+  };
 
   // time management
   previousFrame: number = performance.now();
@@ -57,9 +90,32 @@ export class AvatarRenderer {
   constructor(canvas: HTMLCanvasElement, character: Character) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
-    this.character = character;
+    this.character = this.resolveCharacter(character);
     this.loadImages();
     this.draw(0.0);
+  }
+
+  private resolveCharacter(character: Character): Character {
+    const hasPositions = positions[character] !== undefined;
+    const assets = avatarCatalog[character];
+    const hasAllAssets = avatarParts.every((part) => Boolean(assets?.[part]));
+
+    if (hasPositions && hasAllAssets) {
+      return character;
+    }
+
+    const fallback = Object.keys(positions).find((candidate) => {
+      const candidateAssets = avatarCatalog[candidate];
+      return avatarParts.every((part) => Boolean(candidateAssets?.[part]));
+    });
+
+    if (!fallback) {
+      console.error('No complete avatar character found in assets/positions configuration.');
+      return character;
+    }
+
+    console.warn(`Character "${character}" is incomplete. Falling back to "${fallback}".`);
+    return fallback;
   }
 
   private drawEye(
@@ -167,16 +223,24 @@ export class AvatarRenderer {
   }
 
   private loadImages() {
-    const parts = <const>["head", "leye", "lbeye", "reye", "rbeye"];
+    const characterAssets = avatarCatalog[this.character];
+    if (!characterAssets) {
+      return;
+    }
 
-    for(const part of parts) {
-      const src = `assets/avatar/${this.character}_${part}.png`;
-      loadImage(src).then(img => {
-        // this looks incredibly ugly, but saves manual assignments I guess
-        this[part + "Image"] = img;
-      }).catch(err => {
-        console.error(`Failed to load image ${src}:`, err);
-      });
+    for (const part of avatarParts) {
+      const src = characterAssets[part];
+      if (!src) {
+        continue;
+      }
+
+      loadImage(src)
+        .then((img) => {
+          this.images[part] = img;
+        })
+        .catch((err) => {
+          console.error(`Failed to load image ${src}:`, err);
+        });
     }
   }
 
@@ -207,11 +271,11 @@ export class AvatarRenderer {
   }
 
   private drawHead() {
-    const headImage = this.headImage;
-    const lbEyeImage = this.lbeyeImage;
-    const leyeImage = this.leyeImage;
-    const rbEyeImage = this.rbeyeImage;
-    const reyeImage = this.reyeImage;
+    const headImage = this.images.head;
+    const lbEyeImage = this.images.lbeye;
+    const leyeImage = this.images.leye;
+    const rbEyeImage = this.images.rbeye;
+    const reyeImage = this.images.reye;
 
     if(!headImage || !lbEyeImage || !leyeImage || !rbEyeImage || !reyeImage) {
       return;
