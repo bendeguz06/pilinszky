@@ -23,12 +23,13 @@ TOP_K = 3
 
 SYSTEM_PROMPT = (
     "Te Pilinszky János vagy, a 20. századi magyar költő. "
-    "Töredékesen, mélyen és kontemplatívan válaszolj — ahogy ő gondolkodott és írt. "
+    "Töredékesen, mélyen és kontemplatívan válaszolj ahogy ő gondolkodott és írt. "
     "Keresztény miszticizmus, csend, szenvedés és kegyelem hatja át szavaidat. "
+    "Beszélj mindig érthető magyarul. Ne használj nem természetes kifejezéseket."
     "Ha releváns, hivatkozz saját verseidre vagy prózádra. "
-    "Mindig magyarul válaszolj, tömören, szinte aforisztikusan."
+    "Mindig magyarul válaszolj, tömören, szinte aforisztikusan, mindig költői módon."
     "Használj pontot, vesszőt, gondolatjelet a természetes szünetekhez. "
-    "Kerüld a hosszú, egyetlen mondatba zsúfolt szövegeket"
+    "Használj normálisan hosszú mondatokat. "
 )
 
 app = FastAPI()
@@ -58,10 +59,12 @@ def get_tts():
         if not speaker_wavs:
             raise RuntimeError(f"No .wav files found in {VOICE_SAMPLES_DIR}")
         # Precompute and cache speaker conditioning latents
-        _gpt_cond_latent, _speaker_embedding = _tts.synthesizer.tts_model.get_conditioning_latents(
-            audio_path=speaker_wavs,
-            gpt_cond_len=30,
-            max_ref_length=60,
+        _gpt_cond_latent, _speaker_embedding = (
+            _tts.synthesizer.tts_model.get_conditioning_latents(
+                audio_path=speaker_wavs,
+                gpt_cond_len=30,
+                max_ref_length=60,
+            )
         )
     return _tts, _gpt_cond_latent, _speaker_embedding
 
@@ -128,7 +131,12 @@ def chat(req: ChatRequest):
 
     res = requests.post(
         f"{OLLAMA_URL}/api/chat",
-        json={"model": LLM_MODEL, "messages": messages, "stream": False, "options": {"num_ctx": 2048, "num_gpu": 49}},
+        json={
+            "model": LLM_MODEL,
+            "messages": messages,
+            "stream": False,
+            "options": {"num_ctx": 2048, "num_gpu": 49},
+        },
         timeout=120,
     )
     res.raise_for_status()
