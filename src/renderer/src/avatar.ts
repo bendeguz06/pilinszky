@@ -17,7 +17,7 @@ const positions: Record<string, {
   }
 }
 
-const avatarModules = import.meta.glob('../assets/avatar/*.png', {
+const avatarModules = import.meta.glob('../assets/avatar/**/*.png', {
   eager: true,
   import: 'default'
 }) as Record<string, string>;
@@ -25,12 +25,12 @@ const avatarModules = import.meta.glob('../assets/avatar/*.png', {
 const avatarCatalog: Record<string, Partial<Record<AvatarPart, string>>> = {};
 
 for (const [path, url] of Object.entries(avatarModules)) {
-  const fileName = path.split('/').pop();
+  const fileName = path.split('/').slice(-2).join('/'); // Get last two segments of the path
   if (!fileName) {
     continue;
   }
 
-  const match = fileName.match(/^(.+?)_(head|leye|lbeye|reye|rbeye)\.png$/i);
+  const match = fileName.match(/^(.+?)\/(head|leye|lbeye|reye|rbeye)\.png$/i);
   if (!match) {
     continue;
   }
@@ -230,6 +230,7 @@ export class AvatarRenderer {
 
     for (const part of avatarParts) {
       const src = characterAssets[part];
+      console.log("Loading image: ", src);
       if (!src) {
         continue;
       }
@@ -245,18 +246,16 @@ export class AvatarRenderer {
   }
 
   private drawBackground() {
-    const ratio = window.devicePixelRatio || 1
     const { width, height } = this.canvas.getBoundingClientRect();
 
-    const canvasWidth = Math.max(1, Math.floor(width * ratio));
-    const canvasHeight = Math.max(1, Math.floor(height * ratio));
+    const canvasWidth = Math.max(1, Math.floor(width));
+    const canvasHeight = Math.max(1, Math.floor(height));
 
     if (this.canvas.width !== canvasWidth || this.canvas.height !== canvasHeight) {
       this.canvas.width = canvasWidth;
       this.canvas.height = canvasHeight;
     }
 
-    this.ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     this.ctx.clearRect(0, 0, width, height);
 
     const gradient = this.ctx.createLinearGradient(0, 0, width, height);
