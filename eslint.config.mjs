@@ -2,8 +2,18 @@ import { defineConfig } from 'eslint/config'
 import tseslint from '@electron-toolkit/eslint-config-ts'
 import eslintConfigPrettier from '@electron-toolkit/eslint-config-prettier'
 
-export default defineConfig(
-  { ignores: ['**/node_modules', '**/dist', '**/out'] },
+export default defineConfig([
+  {
+    ignores: ['**/node_modules', '**/dist', '**/out']
+  },
+
   tseslint.configs.recommended,
-  eslintConfigPrettier
-)
+  eslintConfigPrettier,
+
+  {
+    rules: {
+      quotes: ['error', 'double', { avoidEscape: true }],
+      '@typescript-eslint/quotes': ['error', 'double', { avoidEscape: true }],
+    }
+  }
+])

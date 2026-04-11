@@ -32,6 +32,7 @@
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@types/node": "^22.19.1",
+    "@typescript/native-preview": "^7.0.0-dev.20260406.1",
     "electron": "^39.2.6",
     "electron-builder": "^26.0.12",
     "electron-vite": "^5.0.0",
