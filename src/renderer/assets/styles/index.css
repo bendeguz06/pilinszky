@@ -262,3 +262,76 @@ body.prod-layout #history-panel {
   display: none;
 }
 
+.dev-lipsync-panel {
+  position: fixed;
+  right: 12px;
+  top: 12px;
+  z-index: 40;
+  width: min(320px, calc(100vw - 24px));
+  background: rgba(21, 20, 18, 0.95);
+  border: 1px solid #4b463f;
+  border-radius: 8px;
+  padding: 0.65rem;
+  display: grid;
+  gap: 0.55rem;
+  backdrop-filter: blur(6px);
+}
+
+.dev-lipsync-panel h2 {
+  font-size: 0.8rem;
+  font-weight: normal;
+  letter-spacing: 0.08em;
+  color: #d5cfc8;
+}
+
+.dev-lipsync-row {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.dev-lipsync-label {
+  font-size: 0.72rem;
+  color: #aaa39c;
+}
+
+.dev-lipsync-controls {
+  display: grid;
+  grid-template-columns: 1fr 72px;
+  gap: 0.4rem;
+}
+
+.dev-lipsync-controls input[type='range'] {
+  width: 100%;
+}
+
+.dev-lipsync-controls input[type='number'],
+.dev-lipsync-preview input,
+.dev-lipsync-preview button {
+  background: #252320;
+  border: 1px solid #3a3733;
+  color: #d4cfc9;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.78rem;
+}
+
+.dev-lipsync-controls input[type='number'] {
+  width: 100%;
+  padding: 0.22rem 0.35rem;
+}
+
+.dev-lipsync-preview {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+}
+
+.dev-lipsync-preview input {
+  padding: 0.36rem 0.45rem;
+}
+
+.dev-lipsync-preview button {
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+}
+

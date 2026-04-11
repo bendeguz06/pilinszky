@@ -1,8 +1,30 @@
 type Character = string;
 type PositionType = "lbeye" | "leye" | "leyeCenter" | "reye" | "rbeye" | "reyeCenter";
-type AvatarPart = "head" | "leye" | "lbeye" | "reye" | "rbeye";
+type BaseAvatarPart = typeof requiredAvatarParts[number];
+type LipSyncHeadPart = typeof optionalLipSyncParts[number];
+type AvatarPart = BaseAvatarPart | LipSyncHeadPart;
 
-const avatarParts = <const>["head", "leye", "lbeye", "reye", "rbeye"];
+export type LipSyncSettings = {
+  minDurationMs: number;
+  maxDurationMs: number;
+  estimatedCharMs: number;
+  minStepMs: number;
+};
+
+const defaultLipSyncSettings: LipSyncSettings = {
+  minDurationMs: 600,
+  maxDurationMs: 4800,
+  estimatedCharMs: 60,
+  minStepMs: 24
+};
+
+const requiredAvatarParts = <const>["head", "leye", "lbeye", "reye", "rbeye"];
+const optionalLipSyncParts = <const>["head_a", "head_ei", "head_ou", "head_fv", "head_consonant"];
+const loadableAvatarParts = <const>[...requiredAvatarParts, ...optionalLipSyncParts];
+
+function isAvatarPart(part: string): part is AvatarPart {
+  return loadableAvatarParts.includes(part as AvatarPart);
+}
 
 const positions: Record<string, {
   [key in PositionType]: [number, number]
@@ -30,13 +52,17 @@ for (const [path, url] of Object.entries(avatarModules)) {
     continue;
   }
 
-  const match = fileName.match(/^(.+?)\/(head|leye|lbeye|reye|rbeye)\.png$/i);
+  const match = fileName.match(/^(.+?)\/(.+?)\.png$/i);
   if (!match) {
     continue;
   }
 
   const character = match[1];
-  const part = match[2] as AvatarPart;
+  const part = match[2];
+
+  if(!isAvatarPart(part)) {
+    continue;
+  }
 
   if (!avatarCatalog[character]) {
     avatarCatalog[character] = {};
@@ -75,9 +101,23 @@ export class AvatarRenderer {
   blinkDurationMs: number = 220;
   blinkChance: number = 0.25;
 
+  // letter-based lip sync animation
+  lipSyncChars: string[] = [];
+  lipSyncIndex: number = 0;
+  lipSyncElapsed: number = 0;
+  lipSyncStepMs: number = 70;
+  lipSyncActive: boolean = false;
+  activeLipSyncHead: LipSyncHeadPart | null = null;
+  lipSyncSettings: LipSyncSettings = { ...defaultLipSyncSettings };
+
   // images
   images: Record<AvatarPart, HTMLImageElement | null> = {
     head: null,
+    head_a: null,
+    head_ei: null,
+    head_ou: null,
+    head_fv: null,
+    head_consonant: null,
     lbeye: null,
     leye: null,
     rbeye: null,
@@ -98,7 +138,7 @@ export class AvatarRenderer {
   private resolveCharacter(character: Character): Character {
     const hasPositions = positions[character] !== undefined;
     const assets = avatarCatalog[character];
-    const hasAllAssets = avatarParts.every((part) => Boolean(assets?.[part]));
+    const hasAllAssets = requiredAvatarParts.every((part) => Boolean(assets?.[part]));
 
     if (hasPositions && hasAllAssets) {
       return character;
@@ -106,7 +146,7 @@ export class AvatarRenderer {
 
     const fallback = Object.keys(positions).find((candidate) => {
       const candidateAssets = avatarCatalog[candidate];
-      return avatarParts.every((part) => Boolean(candidateAssets?.[part]));
+      return requiredAvatarParts.every((part) => Boolean(candidateAssets?.[part]));
     });
 
     if (!fallback) {
@@ -228,7 +268,7 @@ export class AvatarRenderer {
       return;
     }
 
-    for (const part of avatarParts) {
+    for (const part of loadableAvatarParts) {
       const src = characterAssets[part];
       console.log("Loading image: ", src);
       if (!src) {
@@ -243,6 +283,111 @@ export class AvatarRenderer {
           console.error(`Failed to load image ${src}:`, err);
         });
     }
+  }
+
+  private getLipSyncHeadForChar(char: string): LipSyncHeadPart | null {
+    const normalized = char.toLocaleLowerCase('hu-HU');
+    if (normalized === 'a' || normalized === 'á') {
+      return 'head_a';
+    }
+
+    if (normalized === 'e' || normalized === 'é' || normalized === 'i' || normalized === 'í') {
+      return 'head_ei';
+    }
+
+    if(['u', 'ú', 'ü', 'ű', 'o', 'ó', 'ö', 'ő'].includes(normalized)) {
+      return "head_ou"
+    }
+
+    if(['f', 'v'].includes(normalized)) {
+      return "head_fv";
+    }
+
+    if(['l', 'n', 't', 'd', 's', 'z', 'r'].includes(normalized)) {
+      return "head_consonant";
+    }
+
+    return null;
+  }
+
+  private stopLipSync() {
+    this.lipSyncActive = false;
+    this.lipSyncChars = [];
+    this.lipSyncIndex = 0;
+    this.lipSyncElapsed = 0;
+    this.activeLipSyncHead = null;
+  }
+
+  private stepLipSyncFrame() {
+    if (this.lipSyncIndex >= this.lipSyncChars.length) {
+      this.stopLipSync();
+      return;
+    }
+
+    const char = this.lipSyncChars[this.lipSyncIndex];
+    this.lipSyncIndex += 1;
+    this.activeLipSyncHead = this.getLipSyncHeadForChar(char);
+
+    if (this.lipSyncIndex >= this.lipSyncChars.length) {
+      this.stopLipSync();
+    }
+  }
+
+  private updateLipSync(delta: number) {
+    if (!this.lipSyncActive) {
+      return;
+    }
+
+    this.lipSyncElapsed += delta;
+    while (this.lipSyncElapsed >= this.lipSyncStepMs && this.lipSyncActive) {
+      this.lipSyncElapsed -= this.lipSyncStepMs;
+      this.stepLipSyncFrame();
+    }
+  }
+
+  private normalizeLipSyncSettings(settings: LipSyncSettings): LipSyncSettings {
+    const minDurationMs = Math.min(20000, Math.max(120, settings.minDurationMs));
+    const maxDurationMs = Math.min(30000, Math.max(minDurationMs, settings.maxDurationMs));
+    const estimatedCharMs = Math.min(2000, Math.max(10, settings.estimatedCharMs));
+    const minStepMs = Math.min(500, Math.max(8, settings.minStepMs));
+
+    return {
+      minDurationMs,
+      maxDurationMs,
+      estimatedCharMs,
+      minStepMs
+    };
+  }
+
+  getLipSyncSettings(): LipSyncSettings {
+    return { ...this.lipSyncSettings };
+  }
+
+  setLipSyncSettings(partial: Partial<LipSyncSettings>) {
+    this.lipSyncSettings = this.normalizeLipSyncSettings({
+      ...this.lipSyncSettings,
+      ...partial
+    });
+  }
+
+  playLipSyncText(text: string) {
+    const textChars = Array.from(text);
+    if (textChars.length === 0) {
+      this.stopLipSync();
+      return;
+    }
+    const chars = [...textChars, ' '];
+
+    this.lipSyncChars = chars;
+    this.lipSyncIndex = 0;
+    this.lipSyncElapsed = 0;
+    this.lipSyncActive = true;
+
+    const { minDurationMs, maxDurationMs, estimatedCharMs, minStepMs } = this.lipSyncSettings;
+    const estimatedDurationMs = chars.length * estimatedCharMs;
+    const totalDurationMs = Math.min(maxDurationMs, Math.max(minDurationMs, estimatedDurationMs));
+    this.lipSyncStepMs = Math.max(minStepMs, totalDurationMs / chars.length);
+    this.stepLipSyncFrame();
   }
 
   private drawBackground() {
@@ -291,35 +436,42 @@ export class AvatarRenderer {
 
     const mouseRelative = this.toCanvasPosition(this.mouse[0], this.mouse[1]);
     const blinkProgress = this.getBlinkProgress();
-    this.drawEye(
-      lbEyeImage,
-      leyeImage,
-      positions[this.character].lbeye,
-      positions[this.character].leye,
-      positions[this.character].leyeCenter,
-      headX,
-      headY,
-      mouseRelative,
-      blinkProgress
-    );
-    this.drawEye(
-      rbEyeImage,
-      reyeImage,
-      positions[this.character].rbeye,
-      positions[this.character].reye,
-      positions[this.character].reyeCenter,
-      headX,
-      headY,
-      mouseRelative,
-      blinkProgress
-    );
 
-    this.ctx.drawImage(headImage, headX, headY);
+    const lipSyncImage = this.activeLipSyncHead ? this.images[this.activeLipSyncHead] : null;
+
+    // if lip sync is active, ignore eyes
+    if(!lipSyncImage) {
+      this.drawEye(
+        lbEyeImage,
+        leyeImage,
+        positions[this.character].lbeye,
+        positions[this.character].leye,
+        positions[this.character].leyeCenter,
+        headX,
+        headY,
+        mouseRelative,
+        blinkProgress
+      )
+      this.drawEye(
+        rbEyeImage,
+        reyeImage,
+        positions[this.character].rbeye,
+        positions[this.character].reye,
+        positions[this.character].reyeCenter,
+        headX,
+        headY,
+        mouseRelative,
+        blinkProgress
+      )
+    }
+
+    this.ctx.drawImage(lipSyncImage ?? headImage, headX, headY);
   }
 
   private draw(delta: number) {
     this.bobTime += delta;
     this.updateIdleAnimations(delta);
+    this.updateLipSync(delta);
     this.drawBackground();
     this.drawHead();
 

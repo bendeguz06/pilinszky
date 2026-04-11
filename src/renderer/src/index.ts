@@ -1,5 +1,5 @@
 import { type Message } from "../../shared/types";
-import { AvatarRenderer } from './avatar'
+import { AvatarRenderer, type LipSyncSettings } from './avatar'
 
 const isDev = import.meta.env.DEV;
 
@@ -19,9 +19,122 @@ let selectedMicDeviceId: string | null = localStorage.getItem(micStorageKey);
 let micPickerEl: HTMLDivElement | null = null;
 
 const avatar = new AvatarRenderer(avatarCanvasEl, "pilinszky");
+const lipSyncSettingsStorageKey = 'pilinszky.dev.lipsyncSettings';
 
 if (!isDev) {
   document.body.classList.add("prod-layout");
+}
+
+function setupDevLipSyncPanel(targetAvatar: AvatarRenderer) {
+  let storedSettings: Partial<LipSyncSettings> | null = null;
+  try {
+    const raw = localStorage.getItem(lipSyncSettingsStorageKey);
+    storedSettings = raw ? JSON.parse(raw) as Partial<LipSyncSettings> : null;
+  } catch (err) {
+    console.warn('Failed to parse stored lip-sync settings:', err);
+  }
+
+  if (storedSettings) {
+    targetAvatar.setLipSyncSettings(storedSettings);
+  }
+
+  const panel = document.createElement('aside');
+  panel.className = 'dev-lipsync-panel';
+
+  const title = document.createElement('h2');
+  title.textContent = 'Dev Lip Sync';
+  panel.appendChild(title);
+
+  const settings = targetAvatar.getLipSyncSettings();
+
+  const persistSettings = () => {
+    localStorage.setItem(lipSyncSettingsStorageKey, JSON.stringify(targetAvatar.getLipSyncSettings()));
+  };
+
+  const addRow = (
+    key: keyof LipSyncSettings,
+    labelText: string,
+    min: number,
+    max: number,
+    step: number
+  ) => {
+    const row = document.createElement('label');
+    row.className = 'dev-lipsync-row';
+
+    const label = document.createElement('span');
+    label.className = 'dev-lipsync-label';
+    label.textContent = labelText;
+    row.appendChild(label);
+
+    const controls = document.createElement('div');
+    controls.className = 'dev-lipsync-controls';
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = String(min);
+    slider.max = String(max);
+    slider.step = String(step);
+    slider.value = String(settings[key]);
+
+    const number = document.createElement('input');
+    number.type = 'number';
+    number.min = String(min);
+    number.max = String(max);
+    number.step = String(step);
+    number.value = String(settings[key]);
+
+    const applyValue = (rawValue: number) => {
+      targetAvatar.setLipSyncSettings({ [key]: rawValue });
+      const nextSettings = targetAvatar.getLipSyncSettings();
+      const nextValue = nextSettings[key];
+      slider.value = String(nextValue);
+      number.value = String(nextValue);
+      persistSettings();
+    };
+
+    slider.addEventListener('input', () => {
+      applyValue(Number(slider.value));
+    });
+
+    number.addEventListener('change', () => {
+      applyValue(Number(number.value));
+    });
+
+    controls.appendChild(slider);
+    controls.appendChild(number);
+    row.appendChild(controls);
+    panel.appendChild(row);
+  };
+
+  addRow('estimatedCharMs', 'Char ms', 10, 350, 1);
+  addRow('minDurationMs', 'Min total ms', 120, 12000, 10);
+  addRow('maxDurationMs', 'Max total ms', 200, 20000, 10);
+  addRow('minStepMs', 'Min step ms', 8, 240, 1);
+
+  const previewWrap = document.createElement('div');
+  previewWrap.className = 'dev-lipsync-preview';
+
+  const previewInput = document.createElement('input');
+  previewInput.type = 'text';
+  previewInput.value = 'Szia, ez egy gyors ajakszinkron teszt.';
+  previewInput.setAttribute('aria-label', 'Lip sync preview text');
+
+  const previewBtn = document.createElement('button');
+  previewBtn.type = 'button';
+  previewBtn.textContent = 'Preview';
+  previewBtn.addEventListener('click', () => {
+    targetAvatar.playLipSyncText(previewInput.value);
+  });
+
+  previewWrap.appendChild(previewInput);
+  previewWrap.appendChild(previewBtn);
+  panel.appendChild(previewWrap);
+
+  document.body.appendChild(panel);
+}
+
+if (isDev) {
+  setupDevLipSyncPanel(avatar);
 }
 
 function setMicState(state: MicState, title?: string) {
@@ -205,6 +318,7 @@ async function send() {
     const reply = await window.pilinszky.chat(message, history)
     history.push({ role: 'assistant', content: reply })
     appendMessage('assistant', reply)
+    avatar.playLipSyncText(reply)
 
     const audioSrc = await window.pilinszky.speak(reply)
     const audio = new Audio(audioSrc)
