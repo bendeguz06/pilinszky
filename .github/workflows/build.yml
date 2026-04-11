@@ -30,6 +30,13 @@ jobs:
           path: dist/**
           if-no-files-found: error
 
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
   build-macos:
     runs-on: macos-latest
     steps:
@@ -50,6 +57,13 @@ jobs:
         with:
           name: build-macos
           path: dist/**
+          if-no-files-found: error
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/*.dmg
           if-no-files-found: error
 
   build-windows:
@@ -74,3 +88,9 @@ jobs:
           path: dist/**
           if-no-files-found: error
 
+      - name: Upload Windows portable EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable-exe
+          path: dist/*-portable.exe
+          if-no-files-found: error
