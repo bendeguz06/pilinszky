@@ -2,6 +2,9 @@ import { type Message } from "../../shared/types";
 import { AvatarRenderer, type LipSyncSettings } from './avatar'
 
 const isDev = import.meta.env.DEV;
+const SILENCE_DETECTION_DURATION_MS = 1000;
+const SILENCE_DETECTION_RMS_THRESHOLD = 0.02;
+const SILENCE_DETECTION_POLL_INTERVAL_MS = 100;
 
 const history: Message[] = [];
 
@@ -15,9 +18,6 @@ type MicState = 'idle' | 'active' | 'blocked' | 'unsupported';
 let micState: MicState = 'idle';
 let speechRecognition: SpeechRecognition | null = null;
 const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-const micSilenceDurationMs = 1000;
-const micSilenceLevelThreshold = 0.02;
-const micSilencePollIntervalMs = 100;
 const transcriptionMimeTypeCandidates = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -31,9 +31,9 @@ let localRecorderStream: MediaStream | null = null;
 let speechRecognitionMonitorStream: MediaStream | null = null;
 let micSilenceAnalyserContext: AudioContext | null = null;
 let micSilenceAnalyser: AnalyserNode | null = null;
-let micSilenceBufferLength = 0;
+let micSilenceBuffer: Uint8Array<ArrayBuffer> | null = null;
 let micSilencePollTimer: number | null = null;
-let micSilenceSinceTs: number | null = null;
+let micSilenceStartTime: number | null = null;
 let micDetectedSpeech = false;
 let speechRecognitionStoppingDueToSilence = false;
 let speechRecognitionGotFinalResult = false;
@@ -201,8 +201,8 @@ function stopMicSilenceMonitor() {
 
   micSilenceAnalyserContext = null;
   micSilenceAnalyser = null;
-  micSilenceBufferLength = 0;
-  micSilenceSinceTs = null;
+  micSilenceBuffer = null;
+  micSilenceStartTime = null;
   micDetectedSpeech = false;
 }
 
@@ -217,16 +217,15 @@ async function startMicSilenceMonitor(stream: MediaStream, onSilence: () => void
 
   micSilenceAnalyserContext = audioContext;
   micSilenceAnalyser = analyser;
-  micSilenceBufferLength = analyser.fftSize;
-  micSilenceSinceTs = null;
+  micSilenceBuffer = new Uint8Array(analyser.fftSize);
+  micSilenceStartTime = null;
   micDetectedSpeech = false;
 
   micSilencePollTimer = window.setInterval(() => {
-    if (!micSilenceAnalyser || micSilenceBufferLength <= 0) {
+    if (!micSilenceAnalyser || !micSilenceBuffer) {
       return;
     }
 
-    const micSilenceBuffer = new Uint8Array(micSilenceBufferLength);
     micSilenceAnalyser.getByteTimeDomainData(micSilenceBuffer);
 
     let sumSquares = 0;
@@ -238,9 +237,9 @@ async function startMicSilenceMonitor(stream: MediaStream, onSilence: () => void
     const rms = Math.sqrt(sumSquares / micSilenceBuffer.length);
     const now = Date.now();
 
-    if (rms >= micSilenceLevelThreshold) {
+    if (rms >= SILENCE_DETECTION_RMS_THRESHOLD) {
       micDetectedSpeech = true;
-      micSilenceSinceTs = null;
+      micSilenceStartTime = null;
       return;
     }
 
@@ -248,16 +247,16 @@ async function startMicSilenceMonitor(stream: MediaStream, onSilence: () => void
       return;
     }
 
-    if (micSilenceSinceTs === null) {
-      micSilenceSinceTs = now;
+    if (micSilenceStartTime === null) {
+      micSilenceStartTime = now;
       return;
     }
 
-    if (now - micSilenceSinceTs >= micSilenceDurationMs) {
+    if (now - micSilenceStartTime >= SILENCE_DETECTION_DURATION_MS) {
       stopMicSilenceMonitor();
       onSilence();
     }
-  }, micSilencePollIntervalMs);
+  }, SILENCE_DETECTION_POLL_INTERVAL_MS);
 }
 
 function clearLocalRecorderState() {
