@@ -33,10 +33,6 @@ function getGoogleAudioEncodingFromMimeType(mimeType: string) {
   throw new Error(`Unsupported audio mime type for Google STT: ${mimeType}`)
 }
 
-app.commandLine.appendSwitch('enable-speech-dispatcher')
-app.commandLine.appendSwitch('enable-features', 'SpeechRecognition')
-app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', 'file://')
-
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
