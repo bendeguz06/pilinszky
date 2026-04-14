@@ -3,9 +3,8 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
-import type { LocalTranscriptionPayload, Message } from '../shared/types'
+import type { Message, TranscriptionPayload } from '../shared/types'
 import * as dotenv from 'dotenv'
-import { transcribeWithLocalWhisper } from './whisper'
 dotenv.config()
 
 const POD_URL = process.env.POD_URL
@@ -78,8 +77,13 @@ app.whenReady().then(() => {
     return `data:audio/wav;base64,${base64}`
   })
 
-  ipcMain.handle('transcribe-local', async (_, payload: LocalTranscriptionPayload) => {
-    return transcribeWithLocalWhisper(payload)
+  ipcMain.handle('transcribe', async (_, payload: TranscriptionPayload) => {
+    const res = await axios.post(`${POD_URL}/stt`, {
+      ...payload,
+      language: 'hu-HU'
+    })
+
+    return (res.data?.transcript ?? '') as string
   })
 
   createWindow()

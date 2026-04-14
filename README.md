@@ -33,51 +33,16 @@ $ npm run build:mac
 $ npm run build:linux
 ```
 
-## Local Whisper Fallback (Electron)
+## Speech-to-Text fallback (Electron)
 
-SpeechRecognition remains the primary mic path. If it fails, the renderer records a short local clip and sends it over IPC to Electron main, where `whisper.cpp` runs locally with Hungarian language.
+SpeechRecognition remains the primary mic path. If it fails, the renderer records a short clip and sends it over IPC to Electron main, where the app forwards it to your backend STT endpoint:
 
-### 0. Download runtime assets (no binaries in git)
+- `POST ${POD_URL}/stt`
+- request body: `{ audioBase64, mimeType, language }`
+- response body: `{ transcript: string }`
 
-```bash
-npm run whisper:download
-npm run check:whisper
-```
+Recommended third-party STT providers for reliable Hungarian demo quality:
 
-If you upgraded scripts after an earlier install, re-generate the local binary bundle so runtime libraries are copied too:
-
-```bash
-npm run whisper:download:bin -- --force
-npm run check:whisper
-```
-
-What these scripts do (from upstream `whisper.cpp` sources):
-
-- Model list source: `models/download-ggml-model.sh`
-- Model download source: HuggingFace `ggerganov/whisper.cpp`
-- Windows executable source: latest GitHub release assets
-- Linux/macOS executable source: release tag tarball + local CMake build (official releases currently ship Windows binaries)
-
-### 1. Generated runtime file layout
-
-- `resources/whisper/bin/linux/whisper`
-- `resources/whisper/bin/darwin/whisper`
-- `resources/whisper/bin/win32/whisper.exe`
-- `resources/whisper/models/ggml-small.bin` (default)
-
-### 2. Recommended model choice
-
-- Default for broad compatibility on dedicated GPUs: `ggml-small.bin`
-- Better HU accuracy (more VRAM/latency): `ggml-medium.bin`
-
-Use environment variable `WHISPER_MODEL_FILE` to switch models without code changes.
-
-### 3. Optional runtime overrides
-
-- `WHISPER_BIN_PATH` absolute path to whisper binary
-- `WHISPER_MODEL_PATH` absolute path to model file
-- `WHISPER_MODEL_FILE` model file name under `resources/whisper/models`
-- `WHISPER_FFMPEG_PATH` path to `ffmpeg` used to convert recorder formats (webm/ogg/mp4) to WAV
-- `WHISPER_LANGUAGE` defaults to `hu`
-- `WHISPER_TIMEOUT_MS` defaults to `45000`
-
+- **Google Cloud Speech-to-Text** (very reliable HU, production-grade)
+- **Azure AI Speech** (very reliable HU, strong enterprise uptime)
+- **OpenAI gpt-4o-mini-transcribe** (usually cheapest/easiest for demos, good HU quality)

@@ -5,5 +5,3 @@ out
 .eslintcache
 *.log*
 .env
-resources/whisper/bin/
-resources/whisper/models/*.bin

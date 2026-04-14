@@ -15,9 +15,9 @@ type MicState = 'idle' | 'active' | 'blocked' | 'unsupported';
 let micState: MicState = 'idle';
 let speechRecognition: SpeechRecognition | null = null;
 const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-const localWhisperMaxRecordingMs = 7000;
+const transcriptionRecordingMaxMs = 7000;
 const speechRecognitionMaxListeningMs = 6000;
-const localWhisperMimeTypeCandidates = [
+const transcriptionMimeTypeCandidates = [
   'audio/webm;codecs=opus',
   'audio/webm',
   'audio/ogg;codecs=opus',
@@ -164,12 +164,12 @@ function setMicState(state: MicState, title?: string) {
   micBtnEl.title = title ?? defaultTitleByState[state];
 }
 
-function canUseLocalWhisperFallback(): boolean {
+function canUseRecorderTranscriptionFallback(): boolean {
   return typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
 }
 
 function chooseRecorderMimeType(): string {
-  const supported = localWhisperMimeTypeCandidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
+  const supported = transcriptionMimeTypeCandidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
   return supported ?? 'audio/webm';
 }
 
@@ -203,7 +203,7 @@ function armSpeechRecognitionWatchdog(recognition: SpeechRecognition) {
       return;
     }
 
-    console.warn('Speech recognition stalled without result, switching to local Whisper fallback');
+    console.warn('Speech recognition stalled without result, switching to recorder transcription fallback');
     speechRecognition = null;
     recognition.onstart = null;
     recognition.onend = null;
@@ -216,7 +216,7 @@ function armSpeechRecognitionWatchdog(recognition: SpeechRecognition) {
       console.warn('Failed to abort stalled speech recognition session:', err);
     }
 
-    void startLocalWhisperFallback('speech-timeout');
+    void startRecorderTranscriptionFallback('speech-timeout');
   }, speechRecognitionMaxListeningMs);
 }
 
@@ -233,9 +233,9 @@ function stopLocalRecorder() {
   }
 }
 
-async function startLocalWhisperFallback(origin: string) {
-  if (!canUseLocalWhisperFallback()) {
-    setMicState('unsupported', 'A környezet nem támogatja a lokális hangrögzítést');
+async function startRecorderTranscriptionFallback(origin: string) {
+  if (!canUseRecorderTranscriptionFallback()) {
+    setMicState('unsupported', 'A környezet nem támogatja a rögzítés alapú átírást');
     return;
   }
 
@@ -252,7 +252,7 @@ async function startLocalWhisperFallback(origin: string) {
     localRecorderMimeType = recorder.mimeType || mimeType || 'audio/webm';
     localRecorderChunks = [];
     localRecorderStream = stream;
-    setMicState('active', 'Lokális Whisper fallback rögzítés fut');
+    setMicState('active', 'Rögzítés fut felhős átíráshoz');
 
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
@@ -278,10 +278,10 @@ async function startLocalWhisperFallback(origin: string) {
       try {
         const blob = new Blob(chunks, { type: localRecorderMimeType });
         const audioBuffer = await blob.arrayBuffer();
-        const transcript = (await window.pilinszky.transcribeLocal(audioBuffer, localRecorderMimeType)).trim();
+        const transcript = (await window.pilinszky.transcribe(audioBuffer, localRecorderMimeType)).trim();
 
         if (!transcript) {
-          setMicState('idle', 'A lokális Whisper nem talált beszédet');
+          setMicState('idle', 'Nem sikerült beszédet felismerni');
           return;
         }
 
@@ -289,18 +289,18 @@ async function startLocalWhisperFallback(origin: string) {
         await send();
         setMicState('idle');
       } catch (err) {
-        console.error(`Local Whisper fallback failed (${origin}):`, err);
-        setMicState('blocked', 'Lokális Whisper hiba. Ellenőrizd a binárist és a modellt.');
+        console.error(`Recorder transcription fallback failed (${origin}):`, err);
+        setMicState('blocked', 'Átírási hiba történt. Ellenőrizd az STT szolgáltatást.');
       }
     };
 
     recorder.start();
     localRecorderStopTimeout = window.setTimeout(() => {
       stopLocalRecorder();
-    }, localWhisperMaxRecordingMs);
+    }, transcriptionRecordingMaxMs);
   } catch (err) {
-    console.error(`Local Whisper fallback capture failed (${origin}):`, err);
-    setMicState('blocked', 'Mikrofon engedély vagy lokális rögzítési hiba');
+    console.error(`Recorder transcription fallback capture failed (${origin}):`, err);
+    setMicState('blocked', 'Mikrofon engedély vagy rögzítési hiba');
   }
 }
 
@@ -351,7 +351,7 @@ function getSpeechRecognitionTranscript(event: SpeechRecognitionEvent): string {
 
 async function startMic() {
   if (!SpeechRecognitionCtor) {
-    await startLocalWhisperFallback('speech-unsupported');
+    await startRecorderTranscriptionFallback('speech-unsupported');
     return;
   }
 
@@ -379,7 +379,7 @@ async function startMic() {
       }
 
       if (!speechRecognitionGotFinalResult && !localRecorder && micState !== 'unsupported' && micState !== 'blocked') {
-        void startLocalWhisperFallback('speech-ended-without-result');
+        void startRecorderTranscriptionFallback('speech-ended-without-result');
         return;
       }
 
@@ -396,7 +396,7 @@ async function startMic() {
         speechRecognition = null;
       }
 
-      await startLocalWhisperFallback(`speech-error:${event.error}`);
+      await startRecorderTranscriptionFallback(`speech-error:${event.error}`);
     };
 
     recognition.onresult = (event) => {
@@ -416,7 +416,7 @@ async function startMic() {
   } catch (err) {
     console.error('Speech recognition access failed:', err);
     speechRecognition = null;
-    await startLocalWhisperFallback('speech-start-exception');
+    await startRecorderTranscriptionFallback('speech-start-exception');
   }
 }
 
@@ -474,8 +474,8 @@ micBtnEl.addEventListener('click', () => {
 });
 
 if (!SpeechRecognitionCtor) {
-  if (canUseLocalWhisperFallback()) {
-    setMicState('idle', 'Natív beszédfelismerés nélkül lokális Whisper fallback lesz használva');
+  if (canUseRecorderTranscriptionFallback()) {
+    setMicState('idle', 'Natív beszédfelismerés nélkül felhős STT átírás lesz használva');
   } else {
     setMicState('unsupported');
   }
