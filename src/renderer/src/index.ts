@@ -315,12 +315,11 @@ async function send() {
   history.push({ role: 'user', content: message })
 
   try {
-    const reply = await window.pilinszky.chat(message, history)
+    const { reply, audioSrc } = await window.pilinszky.chat(message, history)
     history.push({ role: 'assistant', content: reply })
     appendMessage('assistant', reply)
     avatar.playLipSyncText(reply)
 
-    const audioSrc = await window.pilinszky.speak(reply)
     const audio = new Audio(audioSrc)
     audio.play().then(null);
   } catch (err) {

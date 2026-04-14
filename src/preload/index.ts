@@ -23,7 +23,5 @@ if (process.contextIsolated) {
 }
 
 contextBridge.exposeInMainWorld('pilinszky', {
-  chat: (message: string, history: Message[]) => ipcRenderer.invoke('chat', { message, history }),
-
-  speak: (text: string) => ipcRenderer.invoke('speak', text)
+  chat: (message: string, history: Message[]) => ipcRenderer.invoke('chat', { message, history })
 })

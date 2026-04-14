@@ -4,7 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
 import { autoUpdater } from 'electron-updater'
-import type { Message } from '../../src/shared/types'
+import type { Message, ChatResponse } from '../../src/shared/types'
 import * as dotenv from 'dotenv'
 dotenv.config()
 
@@ -59,8 +59,9 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('chat', async (_, payload: { message: string; history: Message[] }) => {
-    const res = await axios.post(`${POD_URL}/chat`, payload)
-    return res.data.reply as string
+    const res = await axios.post<ChatResponse>(`${POD_URL}/chat`, payload)
+    const { reply, audio } = res.data
+    return { reply, audioSrc: `data:audio/wav;base64,${audio}` }
   })
 
   // Get TTS audio → return as base64 so renderer can play it

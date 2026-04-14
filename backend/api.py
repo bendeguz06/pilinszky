@@ -1,3 +1,4 @@
+import base64
 import glob
 import os
 import tempfile
@@ -141,7 +142,27 @@ def chat(req: ChatRequest):
     )
     res.raise_for_status()
     reply = res.json()["message"]["content"]
-    return {"reply": reply}
+
+    # Generate TTS audio and return it together with the reply
+    tts_model, gpt_cond_latent, speaker_embedding = get_tts()
+    tts_text = reply.replace("\n", " ").strip()
+    out = tts_model.synthesizer.tts_model.inference(
+        text=tts_text,
+        language="hu",
+        gpt_cond_latent=gpt_cond_latent,
+        speaker_embedding=speaker_embedding,
+    )
+    wav = torch.tensor(out["wav"]).unsqueeze(0)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        torchaudio.save(tmp_path, wav, 24000)
+        with open(tmp_path, "rb") as f:
+            wav_bytes = f.read()
+    finally:
+        os.unlink(tmp_path)
+
+    return {"reply": reply, "audio": base64.b64encode(wav_bytes).decode("utf-8")}
 
 
 @app.post("/tts")
