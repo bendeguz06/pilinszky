@@ -78,12 +78,18 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('transcribe', async (_, payload: TranscriptionPayload) => {
-    const res = await axios.post(`${POD_URL}/stt`, {
-      ...payload,
-      language: 'hu-HU'
-    })
+    try {
+      const res = await axios.post(`${POD_URL}/stt`, {
+        ...payload,
+        language: 'hu-HU'
+      })
 
-    return (res.data?.transcript ?? '') as string
+      return (res.data?.transcript ?? '') as string
+    } catch (error) {
+      throw new Error(
+        `Failed to transcribe audio via remote STT service: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
   })
 
   createWindow()

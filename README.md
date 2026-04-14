@@ -45,4 +45,4 @@ Recommended third-party STT providers for reliable Hungarian demo quality:
 
 - **Google Cloud Speech-to-Text** (very reliable HU, production-grade)
 - **Azure AI Speech** (very reliable HU, strong enterprise uptime)
-- **OpenAI gpt-4o-mini-transcribe** (usually cheapest/easiest for demos, good HU quality)
+- **OpenAI whisper-1** (usually cheapest/easiest for demos, good HU quality)
