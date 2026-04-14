@@ -3,16 +3,46 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
-import type { LocalTranscriptionPayload, Message } from '../shared/types'
+import { SpeechClient } from '@google-cloud/speech'
+import type { Message, TranscriptionPayload } from '../shared/types'
 import * as dotenv from 'dotenv'
-import { transcribeWithLocalWhisper } from './whisper'
 dotenv.config()
 
 const POD_URL = process.env.POD_URL
+let speechClient: SpeechClient | null = null
 
-app.commandLine.appendSwitch('enable-speech-dispatcher')
-app.commandLine.appendSwitch('enable-features', 'SpeechRecognition')
-app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', 'file://')
+function getSpeechClient(): SpeechClient {
+  if (speechClient) {
+    return speechClient
+  }
+
+  speechClient = new SpeechClient()
+  return speechClient
+}
+
+function getGoogleAudioEncodingFromMimeType(mimeType: string) {
+  const normalized = mimeType.toLowerCase()
+
+  if (normalized.includes('webm')) {
+    return 'WEBM_OPUS' as const
+  }
+
+  if (normalized.includes('ogg')) {
+    return 'OGG_OPUS' as const
+  }
+
+  if (normalized.includes('wav')) {
+    return 'LINEAR16' as const
+  }
+
+  if (normalized.includes('flac')) {
+    return 'FLAC' as const
+  }
+
+  throw new Error(
+    `Unsupported audio mime type for Google STT: ${mimeType}. Supported types: webm, ogg, wav, flac`
+  )
+}
 
 function createWindow(): void {
   // Create the browser window.
@@ -78,8 +108,36 @@ app.whenReady().then(() => {
     return `data:audio/wav;base64,${base64}`
   })
 
-  ipcMain.handle('transcribe-local', async (_, payload: LocalTranscriptionPayload) => {
-    return transcribeWithLocalWhisper(payload)
+  ipcMain.handle('transcribe', async (_, payload: TranscriptionPayload) => {
+    try {
+      const encoding = getGoogleAudioEncodingFromMimeType(payload.mimeType)
+      const configuredSampleRateHertz = Number(process.env.STT_SAMPLE_RATE_HZ)
+      const hasValidConfiguredSampleRate =
+        Number.isFinite(configuredSampleRateHertz) && configuredSampleRateHertz > 0
+      const [response] = await getSpeechClient().recognize({
+        audio: {
+          content: payload.audioBase64
+        },
+        config: {
+          encoding,
+          languageCode: process.env.STT_LANGUAGE_CODE ?? 'hu-HU',
+          model: process.env.STT_MODEL ?? 'latest_long',
+          enableAutomaticPunctuation: true,
+          ...(hasValidConfiguredSampleRate ? { sampleRateHertz: configuredSampleRateHertz } : {})
+        }
+      })
+
+      return (
+        response.results
+          ?.map((result) => result.alternatives?.[0]?.transcript?.trim())
+          .filter((text): text is string => Boolean(text))
+          .join(' ') ?? ''
+      )
+    } catch (error) {
+      throw new Error(
+        `Failed to transcribe audio via Google Cloud STT: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
   })
 
   createWindow()

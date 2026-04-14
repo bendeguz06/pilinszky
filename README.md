@@ -33,51 +33,28 @@ $ npm run build:mac
 $ npm run build:linux
 ```
 
-## Local Whisper Fallback (Electron)
+## Speech-to-Text fallback (Electron)
 
-SpeechRecognition remains the primary mic path. If it fails, the renderer records a short local clip and sends it over IPC to Electron main, where `whisper.cpp` runs locally with Hungarian language.
+SpeechRecognition remains the primary mic path. If it fails, the renderer records a short clip and sends it over IPC to Electron main, where the app calls **Google Cloud Speech-to-Text** directly.
 
-### 0. Download runtime assets (no binaries in git)
+### Google Cloud setup
+
+1. Create or select a Google Cloud project.
+2. Enable **Cloud Speech-to-Text API**.
+3. Create a service account with Speech permissions (for example: `roles/speech.client`).
+4. Create a JSON key for that service account.
+5. Set environment variables before starting Electron:
 
 ```bash
-npm run whisper:download
-npm run check:whisper
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+STT_LANGUAGE_CODE=hu-HU
+STT_MODEL=latest_short
+# optional if your input sample rate is fixed:
+STT_SAMPLE_RATE_HZ=48000
 ```
 
-If you upgraded scripts after an earlier install, re-generate the local binary bundle so runtime libraries are copied too:
-
-```bash
-npm run whisper:download:bin -- --force
-npm run check:whisper
-```
-
-What these scripts do (from upstream `whisper.cpp` sources):
-
-- Model list source: `models/download-ggml-model.sh`
-- Model download source: HuggingFace `ggerganov/whisper.cpp`
-- Windows executable source: latest GitHub release assets
-- Linux/macOS executable source: release tag tarball + local CMake build (official releases currently ship Windows binaries)
-
-### 1. Generated runtime file layout
-
-- `resources/whisper/bin/linux/whisper`
-- `resources/whisper/bin/darwin/whisper`
-- `resources/whisper/bin/win32/whisper.exe`
-- `resources/whisper/models/ggml-small.bin` (default)
-
-### 2. Recommended model choice
-
-- Default for broad compatibility on dedicated GPUs: `ggml-small.bin`
-- Better HU accuracy (more VRAM/latency): `ggml-medium.bin`
-
-Use environment variable `WHISPER_MODEL_FILE` to switch models without code changes.
-
-### 3. Optional runtime overrides
-
-- `WHISPER_BIN_PATH` absolute path to whisper binary
-- `WHISPER_MODEL_PATH` absolute path to model file
-- `WHISPER_MODEL_FILE` model file name under `resources/whisper/models`
-- `WHISPER_FFMPEG_PATH` path to `ffmpeg` used to convert recorder formats (webm/ogg/mp4) to WAV
-- `WHISPER_LANGUAGE` defaults to `hu`
-- `WHISPER_TIMEOUT_MS` defaults to `45000`
-
+Notes:
+- `GOOGLE_APPLICATION_CREDENTIALS` is required for local/service-account auth.
+- `STT_LANGUAGE_CODE` defaults to `hu-HU`.
+- `STT_MODEL` defaults to `latest_short`.
+- `STT_SAMPLE_RATE_HZ` is optional.
