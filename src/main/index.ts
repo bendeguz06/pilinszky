@@ -3,11 +3,35 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
+import { SpeechClient } from '@google-cloud/speech'
 import type { Message, TranscriptionPayload } from '../shared/types'
 import * as dotenv from 'dotenv'
 dotenv.config()
 
 const POD_URL = process.env.POD_URL
+const speechClient = new SpeechClient()
+
+function getGoogleAudioEncodingFromMimeType(mimeType: string) {
+  const normalized = mimeType.toLowerCase()
+
+  if (normalized.includes('webm')) {
+    return 'WEBM_OPUS' as const
+  }
+
+  if (normalized.includes('ogg')) {
+    return 'OGG_OPUS' as const
+  }
+
+  if (normalized.includes('wav')) {
+    return 'LINEAR16' as const
+  }
+
+  if (normalized.includes('flac')) {
+    return 'FLAC' as const
+  }
+
+  throw new Error(`Unsupported audio mime type for Google STT: ${mimeType}`)
+}
 
 app.commandLine.appendSwitch('enable-speech-dispatcher')
 app.commandLine.appendSwitch('enable-features', 'SpeechRecognition')
@@ -79,15 +103,29 @@ app.whenReady().then(() => {
 
   ipcMain.handle('transcribe', async (_, payload: TranscriptionPayload) => {
     try {
-      const res = await axios.post(`${POD_URL}/stt`, {
-        ...payload,
-        language: 'hu-HU'
+      const encoding = getGoogleAudioEncodingFromMimeType(payload.mimeType)
+      const sampleRateHertz = Number(process.env.STT_SAMPLE_RATE_HZ)
+      const [response] = await speechClient.recognize({
+        audio: {
+          content: payload.audioBase64
+        },
+        config: {
+          encoding,
+          languageCode: process.env.STT_LANGUAGE_CODE ?? 'hu-HU',
+          model: process.env.STT_MODEL ?? 'latest_short',
+          ...(Number.isFinite(sampleRateHertz) && sampleRateHertz > 0 ? { sampleRateHertz } : {})
+        }
       })
 
-      return (res.data?.transcript ?? '') as string
+      return (
+        response.results
+          ?.map((result) => result.alternatives?.[0]?.transcript?.trim())
+          .filter((text): text is string => Boolean(text))
+          .join(' ') ?? ''
+      )
     } catch (error) {
       throw new Error(
-        `Failed to transcribe audio via remote STT service: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to transcribe audio via Google Cloud STT: ${error instanceof Error ? error.message : String(error)}`
       )
     }
   })
