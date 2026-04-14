@@ -1,4 +1,4 @@
-appId: com.electron.app
+appId: com.bb.pilinszky
 productName: pilinszky
 directories:
   buildResources: build
@@ -13,11 +13,16 @@ asarUnpack:
   - resources/**
 win:
   executableName: pilinszky
-nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+  target:
+    - portable
+    - dir # for development, not for production
+portable:
+  artifactName: ${name}-${version}-portable.${ext}
+#nsis:
+#  artifactName: ${name}-${version}-setup.${ext}
+#  shortcutName: ${productName}
+#  uninstallDisplayName: ${productName}
+#  createDesktopShortcut: always
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -31,8 +36,6 @@ dmg:
 linux:
   target:
     - AppImage
-    - snap
-    - deb
   maintainer: electronjs.org
   category: Utility
 appImage:

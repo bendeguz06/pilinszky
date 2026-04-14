@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import type { Message } from '../shared/types'
 
 declare global {
