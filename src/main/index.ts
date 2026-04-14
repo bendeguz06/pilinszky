@@ -13,10 +13,10 @@ const POD_URL = process.env.POD_URL
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
-    fullscreen: true,
-    kiosk: true,
+    fullscreen: !is.dev,
+    kiosk: !is.dev,
     show: false,
-    autoHideMenuBar: true,
+    autoHideMenuBar: !is.dev,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -24,11 +24,6 @@ function createWindow(): void {
       contextIsolation: true // renderer can't access Node, don't remove.
     }
   })
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
