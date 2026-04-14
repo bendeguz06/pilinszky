@@ -121,7 +121,8 @@ app.whenReady().then(() => {
         config: {
           encoding,
           languageCode: process.env.STT_LANGUAGE_CODE ?? 'hu-HU',
-          model: process.env.STT_MODEL ?? 'latest_short',
+          model: process.env.STT_MODEL ?? 'latest_long',
+          enableAutomaticPunctuation: true,
           ...(hasValidConfiguredSampleRate ? { sampleRateHertz: configuredSampleRateHertz } : {})
         }
       })

@@ -2,7 +2,7 @@ import { type Message } from "../../shared/types";
 import { AvatarRenderer, type LipSyncSettings } from './avatar'
 
 const isDev = import.meta.env.DEV;
-const SILENCE_DETECTION_DURATION_MS = 1000;
+const SILENCE_DETECTION_DURATION_MS = 600;
 const SILENCE_DETECTION_RMS_THRESHOLD = 0.02;
 const SILENCE_DETECTION_POLL_INTERVAL_MS = 100;
 
