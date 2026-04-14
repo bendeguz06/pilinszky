@@ -15,8 +15,9 @@ type MicState = 'idle' | 'active' | 'blocked' | 'unsupported';
 let micState: MicState = 'idle';
 let speechRecognition: SpeechRecognition | null = null;
 const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-const transcriptionRecordingMaxMs = 7000;
-const speechRecognitionMaxListeningMs = 6000;
+const micSilenceDurationMs = 1000;
+const micSilenceLevelThreshold = 0.02;
+const micSilencePollIntervalMs = 100;
 const transcriptionMimeTypeCandidates = [
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -27,8 +28,14 @@ let localRecorder: MediaRecorder | null = null;
 let localRecorderMimeType = 'audio/webm';
 let localRecorderChunks: BlobPart[] = [];
 let localRecorderStream: MediaStream | null = null;
-let localRecorderStopTimeout: number | null = null;
-let speechRecognitionWatchdogTimeout: number | null = null;
+let speechRecognitionMonitorStream: MediaStream | null = null;
+let micSilenceAnalyserContext: AudioContext | null = null;
+let micSilenceAnalyser: AnalyserNode | null = null;
+let micSilenceBufferLength = 0;
+let micSilencePollTimer: number | null = null;
+let micSilenceSinceTs: number | null = null;
+let micDetectedSpeech = false;
+let speechRecognitionStoppingDueToSilence = false;
 let speechRecognitionGotFinalResult = false;
 
 const avatar = new AvatarRenderer(avatarCanvasEl, "pilinszky");
@@ -173,51 +180,95 @@ function chooseRecorderMimeType(): string {
   return supported ?? 'audio/webm';
 }
 
-function clearLocalRecorderState() {
-  if (localRecorderStopTimeout !== null) {
-    window.clearTimeout(localRecorderStopTimeout);
-    localRecorderStopTimeout = null;
+function stopSpeechRecognitionMonitorStream() {
+  if (!speechRecognitionMonitorStream) {
+    return;
   }
 
+  speechRecognitionMonitorStream.getTracks().forEach((track) => track.stop());
+  speechRecognitionMonitorStream = null;
+}
+
+function stopMicSilenceMonitor() {
+  if (micSilencePollTimer !== null) {
+    window.clearInterval(micSilencePollTimer);
+    micSilencePollTimer = null;
+  }
+
+  if (micSilenceAnalyserContext) {
+    void micSilenceAnalyserContext.close();
+  }
+
+  micSilenceAnalyserContext = null;
+  micSilenceAnalyser = null;
+  micSilenceBufferLength = 0;
+  micSilenceSinceTs = null;
+  micDetectedSpeech = false;
+}
+
+async function startMicSilenceMonitor(stream: MediaStream, onSilence: () => void) {
+  stopMicSilenceMonitor();
+
+  const audioContext = new AudioContext();
+  const source = audioContext.createMediaStreamSource(stream);
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+
+  micSilenceAnalyserContext = audioContext;
+  micSilenceAnalyser = analyser;
+  micSilenceBufferLength = analyser.fftSize;
+  micSilenceSinceTs = null;
+  micDetectedSpeech = false;
+
+  micSilencePollTimer = window.setInterval(() => {
+    if (!micSilenceAnalyser || micSilenceBufferLength <= 0) {
+      return;
+    }
+
+    const micSilenceBuffer = new Uint8Array(micSilenceBufferLength);
+    micSilenceAnalyser.getByteTimeDomainData(micSilenceBuffer);
+
+    let sumSquares = 0;
+    for (let index = 0; index < micSilenceBuffer.length; index += 1) {
+      const sample = (micSilenceBuffer[index] - 128) / 128;
+      sumSquares += sample * sample;
+    }
+
+    const rms = Math.sqrt(sumSquares / micSilenceBuffer.length);
+    const now = Date.now();
+
+    if (rms >= micSilenceLevelThreshold) {
+      micDetectedSpeech = true;
+      micSilenceSinceTs = null;
+      return;
+    }
+
+    if (!micDetectedSpeech) {
+      return;
+    }
+
+    if (micSilenceSinceTs === null) {
+      micSilenceSinceTs = now;
+      return;
+    }
+
+    if (now - micSilenceSinceTs >= micSilenceDurationMs) {
+      stopMicSilenceMonitor();
+      onSilence();
+    }
+  }, micSilencePollIntervalMs);
+}
+
+function clearLocalRecorderState() {
   if (localRecorderStream) {
     localRecorderStream.getTracks().forEach((track) => track.stop());
     localRecorderStream = null;
   }
 
+  stopMicSilenceMonitor();
   localRecorder = null;
   localRecorderChunks = [];
-}
-
-function clearSpeechRecognitionWatchdog() {
-  if (speechRecognitionWatchdogTimeout !== null) {
-    window.clearTimeout(speechRecognitionWatchdogTimeout);
-    speechRecognitionWatchdogTimeout = null;
-  }
-}
-
-function armSpeechRecognitionWatchdog(recognition: SpeechRecognition) {
-  clearSpeechRecognitionWatchdog();
-
-  speechRecognitionWatchdogTimeout = window.setTimeout(() => {
-    if (speechRecognition !== recognition || speechRecognitionGotFinalResult || localRecorder) {
-      return;
-    }
-
-    console.warn('Speech recognition stalled without result, switching to recorder transcription fallback');
-    speechRecognition = null;
-    recognition.onstart = null;
-    recognition.onend = null;
-    recognition.onerror = null;
-    recognition.onresult = null;
-
-    try {
-      recognition.abort();
-    } catch (err) {
-      console.warn('Failed to abort stalled speech recognition session:', err);
-    }
-
-    void startRecorderTranscriptionFallback('speech-timeout');
-  }, speechRecognitionMaxListeningMs);
 }
 
 function stopLocalRecorder() {
@@ -253,6 +304,11 @@ async function startRecorderTranscriptionFallback(origin: string) {
     localRecorderChunks = [];
     localRecorderStream = stream;
     setMicState('active', 'Rögzítés fut felhős átíráshoz');
+    await startMicSilenceMonitor(stream, () => {
+      if (localRecorder === recorder) {
+        stopLocalRecorder();
+      }
+    });
 
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
@@ -295,9 +351,6 @@ async function startRecorderTranscriptionFallback(origin: string) {
     };
 
     recorder.start();
-    localRecorderStopTimeout = window.setTimeout(() => {
-      stopLocalRecorder();
-    }, transcriptionRecordingMaxMs);
   } catch (err) {
     console.error(`Recorder transcription fallback capture failed (${origin}):`, err);
     setMicState('blocked', 'Mikrofon engedély vagy rögzítési hiba');
@@ -305,8 +358,10 @@ async function startRecorderTranscriptionFallback(origin: string) {
 }
 
 function stopMic() {
-  clearSpeechRecognitionWatchdog();
+  stopMicSilenceMonitor();
+  stopSpeechRecognitionMonitorStream();
   speechRecognitionGotFinalResult = false;
+  speechRecognitionStoppingDueToSilence = false;
 
   const currentRecognition = speechRecognition;
   speechRecognition = null;
@@ -360,6 +415,7 @@ async function startMic() {
 
     const recognition = new SpeechRecognitionCtor();
     speechRecognitionGotFinalResult = false;
+    speechRecognitionStoppingDueToSilence = false;
     speechRecognition = recognition;
     recognition.lang = 'hu-HU';
     recognition.continuous = false;
@@ -368,17 +424,25 @@ async function startMic() {
 
     recognition.onstart = () => {
       setMicState('active');
-      armSpeechRecognitionWatchdog(recognition);
     };
 
     recognition.onend = () => {
-      clearSpeechRecognitionWatchdog();
+      stopMicSilenceMonitor();
+      stopSpeechRecognitionMonitorStream();
+      const stoppedDueToSilence = speechRecognitionStoppingDueToSilence;
+      speechRecognitionStoppingDueToSilence = false;
 
       if (speechRecognition === recognition) {
         speechRecognition = null;
       }
 
-      if (!speechRecognitionGotFinalResult && !localRecorder && micState !== 'unsupported' && micState !== 'blocked') {
+      if (
+        !speechRecognitionGotFinalResult &&
+        !stoppedDueToSilence &&
+        !localRecorder &&
+        micState !== 'unsupported' &&
+        micState !== 'blocked'
+      ) {
         void startRecorderTranscriptionFallback('speech-ended-without-result');
         return;
       }
@@ -390,7 +454,8 @@ async function startMic() {
 
     recognition.onerror = async (event) => {
       console.error('Speech recognition failed:', event.error, event.message);
-      clearSpeechRecognitionWatchdog();
+      stopMicSilenceMonitor();
+      stopSpeechRecognitionMonitorStream();
 
       if (speechRecognition === recognition) {
         speechRecognition = null;
@@ -410,6 +475,25 @@ async function startMic() {
       inputEl.value = transcript;
       void send();
     };
+
+    try {
+      const monitorStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      speechRecognitionMonitorStream = monitorStream;
+      await startMicSilenceMonitor(monitorStream, () => {
+        if (speechRecognition !== recognition || speechRecognitionGotFinalResult) {
+          return;
+        }
+
+        speechRecognitionStoppingDueToSilence = true;
+        try {
+          recognition.stop();
+        } catch (err) {
+          console.warn('Failed to stop speech recognition on silence:', err);
+        }
+      });
+    } catch (err) {
+      console.warn('Could not start silence monitor for speech recognition:', err);
+    }
 
     recognition.start();
     setMicState('active');
