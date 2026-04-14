@@ -3,11 +3,16 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
-import type { Message } from '../../src/shared/types'
+import type { LocalTranscriptionPayload, Message } from '../shared/types'
 import * as dotenv from 'dotenv'
+import { transcribeWithLocalWhisper } from './whisper'
 dotenv.config()
 
 const POD_URL = process.env.POD_URL
+
+app.commandLine.appendSwitch('enable-speech-dispatcher')
+app.commandLine.appendSwitch('enable-features', 'SpeechRecognition')
+app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', 'file://')
 
 function createWindow(): void {
   // Create the browser window.
@@ -71,6 +76,10 @@ app.whenReady().then(() => {
     )
     const base64 = Buffer.from(res.data).toString('base64')
     return `data:audio/wav;base64,${base64}`
+  })
+
+  ipcMain.handle('transcribe-local', async (_, payload: LocalTranscriptionPayload) => {
+    return transcribeWithLocalWhisper(payload)
   })
 
   createWindow()

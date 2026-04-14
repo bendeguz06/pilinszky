@@ -15,6 +15,21 @@ type MicState = 'idle' | 'active' | 'blocked' | 'unsupported';
 let micState: MicState = 'idle';
 let speechRecognition: SpeechRecognition | null = null;
 const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+const localWhisperMaxRecordingMs = 7000;
+const speechRecognitionMaxListeningMs = 6000;
+const localWhisperMimeTypeCandidates = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/ogg;codecs=opus',
+  'audio/ogg'
+];
+let localRecorder: MediaRecorder | null = null;
+let localRecorderMimeType = 'audio/webm';
+let localRecorderChunks: BlobPart[] = [];
+let localRecorderStream: MediaStream | null = null;
+let localRecorderStopTimeout: number | null = null;
+let speechRecognitionWatchdogTimeout: number | null = null;
+let speechRecognitionGotFinalResult = false;
 
 const avatar = new AvatarRenderer(avatarCanvasEl, "pilinszky");
 const lipSyncSettingsStorageKey = 'pilinszky.dev.lipsyncSettings';
@@ -149,7 +164,150 @@ function setMicState(state: MicState, title?: string) {
   micBtnEl.title = title ?? defaultTitleByState[state];
 }
 
+function canUseLocalWhisperFallback(): boolean {
+  return typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+}
+
+function chooseRecorderMimeType(): string {
+  const supported = localWhisperMimeTypeCandidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
+  return supported ?? 'audio/webm';
+}
+
+function clearLocalRecorderState() {
+  if (localRecorderStopTimeout !== null) {
+    window.clearTimeout(localRecorderStopTimeout);
+    localRecorderStopTimeout = null;
+  }
+
+  if (localRecorderStream) {
+    localRecorderStream.getTracks().forEach((track) => track.stop());
+    localRecorderStream = null;
+  }
+
+  localRecorder = null;
+  localRecorderChunks = [];
+}
+
+function clearSpeechRecognitionWatchdog() {
+  if (speechRecognitionWatchdogTimeout !== null) {
+    window.clearTimeout(speechRecognitionWatchdogTimeout);
+    speechRecognitionWatchdogTimeout = null;
+  }
+}
+
+function armSpeechRecognitionWatchdog(recognition: SpeechRecognition) {
+  clearSpeechRecognitionWatchdog();
+
+  speechRecognitionWatchdogTimeout = window.setTimeout(() => {
+    if (speechRecognition !== recognition || speechRecognitionGotFinalResult || localRecorder) {
+      return;
+    }
+
+    console.warn('Speech recognition stalled without result, switching to local Whisper fallback');
+    speechRecognition = null;
+    recognition.onstart = null;
+    recognition.onend = null;
+    recognition.onerror = null;
+    recognition.onresult = null;
+
+    try {
+      recognition.abort();
+    } catch (err) {
+      console.warn('Failed to abort stalled speech recognition session:', err);
+    }
+
+    void startLocalWhisperFallback('speech-timeout');
+  }, speechRecognitionMaxListeningMs);
+}
+
+function stopLocalRecorder() {
+  if (!localRecorder) {
+    clearLocalRecorderState();
+    return;
+  }
+
+  const recorder = localRecorder;
+  localRecorder = null;
+  if (recorder.state !== 'inactive') {
+    recorder.stop();
+  }
+}
+
+async function startLocalWhisperFallback(origin: string) {
+  if (!canUseLocalWhisperFallback()) {
+    setMicState('unsupported', 'A környezet nem támogatja a lokális hangrögzítést');
+    return;
+  }
+
+  if (localRecorder) {
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const mimeType = chooseRecorderMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+    localRecorder = recorder;
+    localRecorderMimeType = recorder.mimeType || mimeType || 'audio/webm';
+    localRecorderChunks = [];
+    localRecorderStream = stream;
+    setMicState('active', 'Lokális Whisper fallback rögzítés fut');
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        localRecorderChunks.push(event.data);
+      }
+    };
+
+    recorder.onerror = (event) => {
+      console.error('Local recorder failed:', event.error);
+      clearLocalRecorderState();
+      setMicState('blocked', 'Lokális rögzítési hiba történt');
+    };
+
+    recorder.onstop = async () => {
+      const chunks = [...localRecorderChunks];
+      clearLocalRecorderState();
+
+      if (chunks.length === 0) {
+        setMicState('idle', 'Nem érkezett rögzített hang');
+        return;
+      }
+
+      try {
+        const blob = new Blob(chunks, { type: localRecorderMimeType });
+        const audioBuffer = await blob.arrayBuffer();
+        const transcript = (await window.pilinszky.transcribeLocal(audioBuffer, localRecorderMimeType)).trim();
+
+        if (!transcript) {
+          setMicState('idle', 'A lokális Whisper nem talált beszédet');
+          return;
+        }
+
+        inputEl.value = transcript;
+        await send();
+        setMicState('idle');
+      } catch (err) {
+        console.error(`Local Whisper fallback failed (${origin}):`, err);
+        setMicState('blocked', 'Lokális Whisper hiba. Ellenőrizd a binárist és a modellt.');
+      }
+    };
+
+    recorder.start();
+    localRecorderStopTimeout = window.setTimeout(() => {
+      stopLocalRecorder();
+    }, localWhisperMaxRecordingMs);
+  } catch (err) {
+    console.error(`Local Whisper fallback capture failed (${origin}):`, err);
+    setMicState('blocked', 'Mikrofon engedély vagy lokális rögzítési hiba');
+  }
+}
+
 function stopMic() {
+  clearSpeechRecognitionWatchdog();
+  speechRecognitionGotFinalResult = false;
+
   const currentRecognition = speechRecognition;
   speechRecognition = null;
 
@@ -165,6 +323,8 @@ function stopMic() {
       console.warn('Failed to stop speech recognition:', err);
     }
   }
+
+  stopLocalRecorder();
 
   if (micState !== 'unsupported') {
     setMicState('idle');
@@ -191,7 +351,7 @@ function getSpeechRecognitionTranscript(event: SpeechRecognitionEvent): string {
 
 async function startMic() {
   if (!SpeechRecognitionCtor) {
-    setMicState('unsupported');
+    await startLocalWhisperFallback('speech-unsupported');
     return;
   }
 
@@ -199,6 +359,7 @@ async function startMic() {
     stopMic();
 
     const recognition = new SpeechRecognitionCtor();
+    speechRecognitionGotFinalResult = false;
     speechRecognition = recognition;
     recognition.lang = 'hu-HU';
     recognition.continuous = false;
@@ -207,34 +368,35 @@ async function startMic() {
 
     recognition.onstart = () => {
       setMicState('active');
+      armSpeechRecognitionWatchdog(recognition);
     };
 
     recognition.onend = () => {
+      clearSpeechRecognitionWatchdog();
+
       if (speechRecognition === recognition) {
         speechRecognition = null;
       }
 
-      if (micState !== 'unsupported' && micState !== 'blocked') {
+      if (!speechRecognitionGotFinalResult && !localRecorder && micState !== 'unsupported' && micState !== 'blocked') {
+        void startLocalWhisperFallback('speech-ended-without-result');
+        return;
+      }
+
+      if (!localRecorder && micState !== 'unsupported' && micState !== 'blocked') {
         setMicState('idle');
       }
     };
 
-    recognition.onerror = (event) => {
+    recognition.onerror = async (event) => {
       console.error('Speech recognition failed:', event.error, event.message);
+      clearSpeechRecognitionWatchdog();
 
       if (speechRecognition === recognition) {
         speechRecognition = null;
       }
 
-      const blockedErrors = new Set(['not-allowed', 'service-not-allowed', 'audio-capture', 'language-not-supported']);
-      if (blockedErrors.has(event.error)) {
-        setMicState('blocked', 'A beszédfelismerés nem érhető el vagy nincs engedély');
-        return;
-      }
-
-      if (micState !== 'unsupported') {
-        setMicState('idle', 'Nem sikerült felismerni a beszédet');
-      }
+      await startLocalWhisperFallback(`speech-error:${event.error}`);
     };
 
     recognition.onresult = (event) => {
@@ -243,6 +405,7 @@ async function startMic() {
         return;
       }
 
+      speechRecognitionGotFinalResult = true;
       stopMic();
       inputEl.value = transcript;
       void send();
@@ -253,7 +416,7 @@ async function startMic() {
   } catch (err) {
     console.error('Speech recognition access failed:', err);
     speechRecognition = null;
-    setMicState('blocked', 'Mikrofon engedély vagy beszédfelismerési hiba');
+    await startLocalWhisperFallback('speech-start-exception');
   }
 }
 
@@ -302,7 +465,7 @@ micBtnEl.addEventListener('click', () => {
     return;
   }
 
-  if (speechRecognition) {
+  if (speechRecognition || localRecorder) {
     stopMic();
     return;
   }
@@ -311,7 +474,11 @@ micBtnEl.addEventListener('click', () => {
 });
 
 if (!SpeechRecognitionCtor) {
-  setMicState('unsupported');
+  if (canUseLocalWhisperFallback()) {
+    setMicState('idle', 'Natív beszédfelismerés nélkül lokális Whisper fallback lesz használva');
+  } else {
+    setMicState('unsupported');
+  }
 } else {
   setMicState('idle');
 }

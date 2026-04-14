@@ -7,3 +7,9 @@ export interface ChatPayload {
   message: string
   history: Message[]
 }
+
+export interface LocalTranscriptionPayload {
+  audioBase64: string
+  mimeType: string
+}
+
