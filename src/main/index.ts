@@ -3,7 +3,6 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
-import { autoUpdater } from 'electron-updater'
 import type { Message } from '../../src/shared/types'
 import * as dotenv from 'dotenv'
 dotenv.config()
@@ -47,9 +46,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
-
-  autoUpdater.checkForUpdatesAndNotify()
+  electronApp.setAppUserModelId('com.bb.pilinszky')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
