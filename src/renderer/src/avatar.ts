@@ -677,6 +677,15 @@ export class AvatarRenderer {
   }
 
   private draw(delta: number) {
+    // scale up canvas from the middle
+    const cx = this.canvas.width / 2;
+    const cy = this.canvas.height / 2;
+    const scale = 2;
+    this.ctx.setTransform(
+      scale, 0, 0, scale,
+      cx - scale * cx,
+      cy - scale * cy
+    );
     this.bobTime += delta;
     this.updateIdleAnimations(delta);
     this.updateLipSync(delta);
