@@ -1,6 +1,7 @@
 import base64
 import glob
 import os
+import re
 import tempfile
 
 import chromadb
@@ -32,6 +33,8 @@ SYSTEM_PROMPT = (
     "Használj pontot, vesszőt, gondolatjelet a természetes szünetekhez. "
     "Használj normálisan hosszú mondatokat. "
 )
+
+XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
 
 app = FastAPI()
 
@@ -68,6 +71,64 @@ def get_tts():
             )
         )
     return _tts, _gpt_cond_latent, _speaker_embedding
+
+
+def split_into_chunks(text: str, limit: int = XTTS_CHAR_LIMIT) -> list[str]:
+    """Split text into chunks under `limit` chars, breaking at sentence boundaries."""
+    # Split on sentence-ending punctuation, keeping the delimiter
+    sentences = re.split(r'(?<=[.!?…\u2014])\s+', text)
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        # If a single sentence exceeds the limit, split on commas/semicolons
+        if len(sentence) > limit:
+            sub_parts = re.split(r'(?<=[,;])\s+', sentence)
+            for part in sub_parts:
+                if len(current) + len(part) + 1 <= limit:
+                    current = (current + " " + part).strip() if current else part
+                else:
+                    if current:
+                        chunks.append(current)
+                    # If even a single part is too long, hard-split it
+                    while len(part) > limit:
+                        chunks.append(part[:limit])
+                        part = part[limit:]
+                    current = part
+        else:
+            if len(current) + len(sentence) + 1 <= limit:
+                current = (current + " " + sentence).strip() if current else sentence
+            else:
+                if current:
+                    chunks.append(current)
+                current = sentence
+    if current:
+        chunks.append(current)
+    return [c for c in chunks if c.strip()]
+
+
+def synthesize_text(text: str) -> bytes:
+    """Synthesize arbitrarily long text by chunking and concatenating WAV audio."""
+    tts_model, gpt_cond_latent, speaker_embedding = get_tts()
+    chunks = split_into_chunks(text)
+    wav_chunks = []
+    for chunk in chunks:
+        out = tts_model.synthesizer.tts_model.inference(
+            text=chunk,
+            language="hu",
+            gpt_cond_latent=gpt_cond_latent,
+            speaker_embedding=speaker_embedding,
+        )
+        wav_chunks.append(torch.tensor(out["wav"]))
+
+    combined = torch.cat(wav_chunks).unsqueeze(0)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        torchaudio.save(tmp_path, combined, 24000)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        os.unlink(tmp_path)
 
 
 @app.on_event("startup")
@@ -143,48 +204,14 @@ def chat(req: ChatRequest):
     res.raise_for_status()
     reply = res.json()["message"]["content"]
 
-    # Generate TTS audio and return it together with the reply
-    tts_model, gpt_cond_latent, speaker_embedding = get_tts()
     tts_text = reply.replace("\n", " ").strip()
-    out = tts_model.synthesizer.tts_model.inference(
-        text=tts_text,
-        language="hu",
-        gpt_cond_latent=gpt_cond_latent,
-        speaker_embedding=speaker_embedding,
-    )
-    wav = torch.tensor(out["wav"]).unsqueeze(0)
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        torchaudio.save(tmp_path, wav, 24000)
-        with open(tmp_path, "rb") as f:
-            wav_bytes = f.read()
-    finally:
-        os.unlink(tmp_path)
+    wav_bytes = synthesize_text(tts_text)
 
     return {"reply": reply, "audio": base64.b64encode(wav_bytes).decode("utf-8")}
 
 
 @app.post("/tts")
 def tts(req: TTSRequest):
-    tts_model, gpt_cond_latent, speaker_embedding = get_tts()
-
     text = req.text.replace("\n", " ").strip()
-    out = tts_model.synthesizer.tts_model.inference(
-        text=text,
-        language="hu",
-        gpt_cond_latent=gpt_cond_latent,
-        speaker_embedding=speaker_embedding,
-    )
-    wav = torch.tensor(out["wav"]).unsqueeze(0)
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        torchaudio.save(tmp_path, wav, 24000)
-        with open(tmp_path, "rb") as f:
-            wav_bytes = f.read()
-    finally:
-        os.unlink(tmp_path)
-
+    wav_bytes = synthesize_text(text)
     return Response(content=wav_bytes, media_type="audio/wav")
