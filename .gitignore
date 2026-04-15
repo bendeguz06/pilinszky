@@ -6,3 +6,4 @@ out
 *.log*
 .env
 .google
+backend/chroma_db

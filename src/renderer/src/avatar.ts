@@ -14,8 +14,8 @@ export type LipSyncSettings = {
 const defaultLipSyncSettings: LipSyncSettings = {
   minDurationMs: 600,
   maxDurationMs: 4800,
-  estimatedCharMs: 60,
-  minStepMs: 24
+  estimatedCharMs: 130,
+  minStepMs: 90
 };
 
 const audioLipSyncConfig = {
@@ -139,6 +139,7 @@ export class AvatarRenderer {
   audioLipSyncSource: MediaElementAudioSourceNode | null = null;
   audioLipSyncAnalyser: AnalyserNode | null = null;
   audioLipSyncRafId: number | null = null;
+  audioPlaybackDoneResolver: (() => void) | null = null;
 
   // images
   images: Record<AvatarPart, HTMLImageElement | null> = {
@@ -197,7 +198,8 @@ export class AvatarRenderer {
     headX: number,
     headY: number,
     mouseRelative: [number, number],
-    blinkProgress: number | null
+    blinkProgress: number | null,
+    trackMouse: boolean = true
   ) {
     const eyeMaxOffsetX = 6;
     const eyeMaxOffsetY = 3;
@@ -215,33 +217,35 @@ export class AvatarRenderer {
     let mouseOffsetX = 0;
     let mouseOffsetY = 0;
 
-    const dx = mouseRelative[0] - eyeCenterX;
-    const dy = mouseRelative[1] - eyeCenterY;
-    const distanceToMouse = Math.hypot(dx, dy);
+    if (trackMouse) {
+      const dx = mouseRelative[0] - eyeCenterX;
+      const dy = mouseRelative[1] - eyeCenterY;
+      const distanceToMouse = Math.hypot(dx, dy);
 
-    if (distanceToMouse > 0.0001) {
-      const unitX = dx / distanceToMouse;
-      const unitY = dy / distanceToMouse;
+      if (distanceToMouse > 0.0001) {
+        const unitX = dx / distanceToMouse;
+        const unitY = dy / distanceToMouse;
 
-      const { width: canvasWidth, height: canvasHeight } = this.canvas.getBoundingClientRect();
-      const tX = unitX > 0
-        ? (canvasWidth - eyeCenterX) / unitX
-        : unitX < 0
-          ? (0 - eyeCenterX) / unitX
-          : Number.POSITIVE_INFINITY;
-      const tY = unitY > 0
-        ? (canvasHeight - eyeCenterY) / unitY
-        : unitY < 0
-          ? (0 - eyeCenterY) / unitY
-          : Number.POSITIVE_INFINITY;
+        const { width: canvasWidth, height: canvasHeight } = this.canvas.getBoundingClientRect();
+        const tX = unitX > 0
+          ? (canvasWidth - eyeCenterX) / unitX
+          : unitX < 0
+            ? (0 - eyeCenterX) / unitX
+            : Number.POSITIVE_INFINITY;
+        const tY = unitY > 0
+          ? (canvasHeight - eyeCenterY) / unitY
+          : unitY < 0
+            ? (0 - eyeCenterY) / unitY
+            : Number.POSITIVE_INFINITY;
 
-      const distanceToEdge = Math.min(tX, tY);
-      const progress = distanceToEdge > 0
-        ? Math.min(1, distanceToMouse / distanceToEdge)
-        : 1;
+        const distanceToEdge = Math.min(tX, tY);
+        const progress = distanceToEdge > 0
+          ? Math.min(1, distanceToMouse / distanceToEdge)
+          : 1;
 
-      mouseOffsetX = unitX * eyeMaxOffsetX * progress;
-      mouseOffsetY = unitY * eyeMaxOffsetY * progress;
+        mouseOffsetX = unitX * eyeMaxOffsetX * progress;
+        mouseOffsetY = unitY * eyeMaxOffsetY * progress;
+      }
     }
 
     const offsetX = mouseOffsetX;
@@ -350,6 +354,11 @@ export class AvatarRenderer {
   }
 
   private stopAudioDrivenLipSync() {
+    if (this.audioPlaybackDoneResolver) {
+      this.audioPlaybackDoneResolver();
+      this.audioPlaybackDoneResolver = null;
+    }
+
     if (this.audioLipSyncRafId !== null) {
       cancelAnimationFrame(this.audioLipSyncRafId);
       this.audioLipSyncRafId = null;
@@ -583,16 +592,38 @@ export class AvatarRenderer {
       }
     };
 
-    audioElement.onended = () => {
-      this.stopLipSync();
-    };
-    audioElement.onerror = () => {
-      this.stopLipSync();
-    };
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.audioPlaybackDoneResolver = null;
+        resolve();
+      };
 
-    await audioContext.resume();
-    await audioElement.play();
-    this.audioLipSyncRafId = requestAnimationFrame(drive);
+      this.audioPlaybackDoneResolver = finish;
+
+      audioElement.onended = () => {
+        this.stopLipSync();
+      };
+      audioElement.onerror = () => {
+        this.stopLipSync();
+      };
+
+      void audioContext
+        .resume()
+        .then(() => audioElement.play())
+        .then(() => {
+          this.audioLipSyncRafId = requestAnimationFrame(drive);
+        })
+        .catch((error) => {
+          this.audioPlaybackDoneResolver = null;
+          settled = true;
+          reject(error);
+        });
+    });
   }
 
   private drawBackground() {
@@ -643,37 +674,46 @@ export class AvatarRenderer {
     const blinkProgress = this.getBlinkProgress();
 
     const lipSyncImage = this.activeLipSyncHead ? this.images[this.activeLipSyncHead] : null;
+    const isSpeaking = this.lipSyncActive || (this.audioLipSyncElement !== null && !this.audioLipSyncElement.paused && !this.audioLipSyncElement.ended);
 
-    // if lip sync is active, ignore eyes
-    if(!lipSyncImage) {
-      this.drawEye(
-        lbEyeImage,
-        leyeImage,
-        positions[this.character].lbeye,
-        positions[this.character].leye,
-        positions[this.character].leyeCenter,
-        headX,
-        headY,
-        mouseRelative,
-        blinkProgress
-      )
-      this.drawEye(
-        rbEyeImage,
-        reyeImage,
-        positions[this.character].rbeye,
-        positions[this.character].reye,
-        positions[this.character].reyeCenter,
-        headX,
-        headY,
-        mouseRelative,
-        blinkProgress
-      )
-    }
+    this.drawEye(
+      lbEyeImage,
+      leyeImage,
+      positions[this.character].lbeye,
+      positions[this.character].leye,
+      positions[this.character].leyeCenter,
+      headX,
+      headY,
+      mouseRelative,
+      blinkProgress,
+      !isSpeaking
+    )
+    this.drawEye(
+      rbEyeImage,
+      reyeImage,
+      positions[this.character].rbeye,
+      positions[this.character].reye,
+      positions[this.character].reyeCenter,
+      headX,
+      headY,
+      mouseRelative,
+      blinkProgress,
+      !isSpeaking
+    )
 
     this.ctx.drawImage(lipSyncImage ?? headImage, headX, headY);
   }
 
   private draw(delta: number) {
+    // scale up canvas from the middle
+    const cx = this.canvas.width / 2;
+    const cy = this.canvas.height / 2;
+    const scale = 2;
+    this.ctx.setTransform(
+      scale, 0, 0, scale,
+      cx - scale * cx,
+      cy - scale * cy
+    );
     this.bobTime += delta;
     this.updateIdleAnimations(delta);
     this.updateLipSync(delta);
