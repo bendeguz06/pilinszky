@@ -67,6 +67,7 @@ AUDIO_MAX_FLUSH_CHAR_THRESHOLD = 520
 AUDIO_MIN_SENTENCE_COUNT = 2
 ELLIPSIS_TRIPLE_PLACEHOLDER = "__ELLIPSIS_TRIPLE__"
 ELLIPSIS_SINGLE_PLACEHOLDER = "__ELLIPSIS_SINGLE__"
+SENTENCE_BOUNDARY_PATTERN = r"[.!?](?=\s|$)"
 
 app = FastAPI()
 logger = logging.getLogger(__name__)
@@ -269,11 +270,13 @@ def should_flush_audio(buffer: str) -> bool:
         return False
     if stripped.endswith("...") or stripped.endswith("…"):
         return False
-    normalized = re.sub(r"\s+", " ", stripped).strip()
-    if len(normalized) >= AUDIO_MAX_FLUSH_CHAR_THRESHOLD:
+    if len(stripped) >= AUDIO_MAX_FLUSH_CHAR_THRESHOLD:
         return True
-    sentence_count = len(re.findall(r"[.!?](?=\s|$)", stripped))
-    ends_with_sentence_boundary = stripped.endswith((".", "!", "?"))
+    normalized = re.sub(r"\s+", " ", stripped).strip()
+    sentence_count = len(re.findall(SENTENCE_BOUNDARY_PATTERN, stripped))
+    ends_with_sentence_boundary = (
+        re.search(SENTENCE_BOUNDARY_PATTERN + r"\s*$", stripped) is not None
+    )
     if ends_with_sentence_boundary and len(normalized) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD:
         return True
     if sentence_count >= AUDIO_MIN_SENTENCE_COUNT and len(normalized) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD:
