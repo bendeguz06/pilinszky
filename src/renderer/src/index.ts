@@ -9,6 +9,7 @@ const SILENCE_DETECTION_POLL_INTERVAL_MS = 100;
 const history: Message[] = [];
 
 const messagesEl = document.querySelector<HTMLDivElement>("#messages")!;
+const canvasPanelEl = document.querySelector<HTMLElement>("#canvas-panel")!;
 const inputEl = document.querySelector<HTMLInputElement>("#input")!;
 const sendBtn = document.querySelector<HTMLButtonElement>("#send")!;
 const micBtnEl = document.querySelector<HTMLButtonElement>("#mic-button")!;
@@ -37,13 +38,17 @@ let micSilenceStartTime: number | null = null;
 let micDetectedSpeech = false;
 let speechRecognitionStoppingDueToSilence = false;
 let speechRecognitionGotFinalResult = false;
+let isAwaitingResponse = false;
+let loadingMessageEl: HTMLDivElement | null = null;
+
+const avatarStatusEl = document.createElement('div');
+avatarStatusEl.id = 'avatar-status';
+avatarStatusEl.setAttribute('role', 'status');
+avatarStatusEl.setAttribute('aria-live', 'polite');
+canvasPanelEl.appendChild(avatarStatusEl);
 
 const avatar = new AvatarRenderer(avatarCanvasEl, "pilinszky");
 const lipSyncSettingsStorageKey = 'pilinszky.dev.lipsyncSettings';
-
-if (!isDev) {
-  document.body.classList.add("prod-layout");
-}
 
 function setupDevLipSyncPanel(targetAvatar: AvatarRenderer) {
   let storedSettings: Partial<LipSyncSettings> | null = null;
@@ -178,6 +183,43 @@ function canUseRecorderTranscriptionFallback(): boolean {
 function chooseRecorderMimeType(): string {
   const supported = transcriptionMimeTypeCandidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
   return supported ?? 'audio/webm';
+}
+
+function setLoadingStatus(text: string | null) {
+  avatarStatusEl.textContent = text ?? '';
+
+  if (text === null) {
+    avatarStatusEl.dataset.state = 'idle';
+  } else {
+    avatarStatusEl.dataset.state = 'busy';
+  }
+
+  if (text === null) {
+    if (loadingMessageEl) {
+      loadingMessageEl.remove();
+      loadingMessageEl = null;
+    }
+    return;
+  }
+
+  if (!loadingMessageEl) {
+    loadingMessageEl = document.createElement('div');
+    loadingMessageEl.className = 'msg status';
+    messagesEl.appendChild(loadingMessageEl);
+  }
+
+  loadingMessageEl.textContent = text;
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function setRequestInFlight(isInFlight: boolean) {
+  isAwaitingResponse = isInFlight;
+  inputEl.disabled = isInFlight;
+  sendBtn.disabled = isInFlight;
+
+  if (!isInFlight) {
+    setLoadingStatus(null);
+  }
 }
 
 function stopSpeechRecognitionMonitorStream() {
@@ -513,10 +555,11 @@ function appendMessage(role: string, text: string) {
 
 async function send() {
   const message = inputEl.value.trim()
-  if (!message) return
+  if (!message || isAwaitingResponse) return
 
+  setRequestInFlight(true)
+  setLoadingStatus('Pilinszky válaszol…')
   inputEl.value = ''
-  sendBtn.disabled = true
   appendMessage('user', message)
   history.push({ role: 'user', content: message })
 
@@ -529,7 +572,7 @@ async function send() {
     appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
     console.error(err)
   } finally {
-    sendBtn.disabled = false
+    setRequestInFlight(false)
     inputEl.focus()
   }
 }

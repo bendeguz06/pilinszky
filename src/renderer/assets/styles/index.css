@@ -63,12 +63,34 @@ body {
   border-radius: 8px;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 #avatar-canvas {
   width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   display: block;
+}
+
+#avatar-status {
+  min-height: 2.6rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid #2d2a26;
+  color: #a7a19b;
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#avatar-status:empty {
+  min-height: 0;
+  padding: 0;
+  border-top-color: transparent;
 }
 
 .msg {
@@ -86,6 +108,15 @@ body {
 .msg.assistant {
   align-self: flex-start;
   color: #e8e3dc;
+}
+
+.msg.status {
+  align-self: center;
+  color: #a7a19b;
+  font-size: 0.82rem;
+  font-style: normal;
+  letter-spacing: 0.03em;
+  text-align: center;
 }
 
 #input-bar {
@@ -223,6 +254,11 @@ body {
 
 #input:focus { border-color: #6a6560; }
 
+#input:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 #send {
   background: #252320;
   border: 1px solid #3a3733;
@@ -254,13 +290,6 @@ body {
   }
 }
 
-body.prod-layout #content {
-  grid-template-columns: 1fr;
-}
-
-body.prod-layout #history-panel {
-  display: none;
-}
 
 .dev-lipsync-panel {
   position: fixed;
