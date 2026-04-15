@@ -7,7 +7,7 @@ import type {
   TranscriptionPayload
 } from '../shared/types'
 
-const CHAT_STREAM_CANCELLED_ERROR = 'CHAT_STREAM_CANCELLED'
+const CHAT_STREAM_CANCELLED = 'CHAT_STREAM_CANCELLED'
 let activeChatStreamRequestId: string | null = null
 let activeChatStreamReject: ((reason?: unknown) => void) | null = null
 let activeChatStreamListener: ((_: Electron.IpcRendererEvent, event: ChatStreamIpcEvent) => void) | null = null
@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld('pilinszky', {
   ) => {
     if (activeChatStreamRequestId) {
       await ipcRenderer.invoke('chat-stream-cancel', activeChatStreamRequestId)
-      activeChatStreamReject?.(new Error(CHAT_STREAM_CANCELLED_ERROR))
+      activeChatStreamReject?.(new Error(CHAT_STREAM_CANCELLED))
       cleanupActiveChatStreamListener()
     }
 
@@ -87,7 +87,7 @@ contextBridge.exposeInMainWorld('pilinszky', {
 
     const requestId = activeChatStreamRequestId
     const cancelled = await ipcRenderer.invoke('chat-stream-cancel', requestId)
-    activeChatStreamReject?.(new Error(CHAT_STREAM_CANCELLED_ERROR))
+    activeChatStreamReject?.(new Error(CHAT_STREAM_CANCELLED))
     cleanupActiveChatStreamListener()
     return Boolean(cancelled)
   },

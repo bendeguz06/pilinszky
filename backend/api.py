@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 from collections.abc import Generator
+from json import JSONDecodeError
 
 import chromadb
 import requests
@@ -227,7 +228,11 @@ def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
         for line in res.iter_lines():
             if not line:
                 continue
-            chunk = json.loads(line)
+            try:
+                chunk = json.loads(line)
+            except JSONDecodeError:
+                logger.warning("Skipping malformed Ollama stream line")
+                continue
             token = chunk.get("message", {}).get("content", "")
             if token:
                 yield token
@@ -239,7 +244,7 @@ def should_flush_audio(buffer: str) -> bool:
         return False
     return (
         len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
-        or stripped.endswith((".", "!", "?", "…"))
+        or stripped.endswith((".", "!", "?"))
         or stripped.endswith("\n")
     )
 
