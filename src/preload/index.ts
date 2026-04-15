@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { Message, TranscriptionPayload } from '../shared/types'
+import type { ChatStreamIpcEvent, Message, TranscriptionPayload } from '../shared/types'
 
 // Custom APIs for renderer
 const api = {}
@@ -24,6 +24,38 @@ if (process.contextIsolated) {
 
 contextBridge.exposeInMainWorld('pilinszky', {
   chat: (message: string, history: Message[]) => ipcRenderer.invoke('chat', { message, history }),
+
+  chatStream: async (
+    message: string,
+    history: Message[],
+    onEvent: (event: Omit<ChatStreamIpcEvent, 'requestId'>) => void
+  ) => {
+    const requestId = await ipcRenderer.invoke('chat-stream-start', { message, history })
+
+    return await new Promise<string>((resolve, reject) => {
+      const listener = (_: Electron.IpcRendererEvent, event: ChatStreamIpcEvent) => {
+        if (event.requestId !== requestId) return
+
+        if (event.type === 'error') {
+          ipcRenderer.removeListener('chat-stream-event', listener)
+          onEvent({ type: 'error', error: event.error })
+          reject(new Error(event.error))
+          return
+        }
+
+        if (event.type === 'done') {
+          ipcRenderer.removeListener('chat-stream-event', listener)
+          onEvent({ type: 'done', reply: event.reply })
+          resolve(event.reply)
+          return
+        }
+
+        onEvent(event)
+      }
+
+      ipcRenderer.on('chat-stream-event', listener)
+    })
+  },
 
   transcribe: (audio: ArrayBuffer, mimeType: string) => {
     const payload: TranscriptionPayload = {

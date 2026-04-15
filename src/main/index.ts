@@ -1,11 +1,17 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
 import { SpeechClient } from '@google-cloud/speech'
 import { autoUpdater } from 'electron-updater'
-import type { ChatResponse, Message, TranscriptionPayload } from '../shared/types'
+import type {
+  ChatStreamIpcEvent,
+  ChatStreamServerEvent,
+  Message,
+  TranscriptionPayload
+} from '../shared/types'
 import * as dotenv from 'dotenv'
 dotenv.config()
 
@@ -94,9 +100,90 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('chat', async (_, payload: { message: string; history: Message[] }) => {
-    const res = await axios.post<ChatResponse>(`${POD_URL}/chat`, payload)
+    const res = await axios.post<{ reply: string; audio: string }>(`${POD_URL}/chat`, payload)
     const { reply, audio } = res.data
     return { reply, audioSrc: `data:audio/wav;base64,${audio}` }
+  })
+
+  ipcMain.handle('chat-stream-start', async (event, payload: { message: string; history: Message[] }) => {
+    const requestId = randomUUID()
+    const sender = event.sender
+
+    void (async () => {
+      try {
+        const response = await fetch(`${POD_URL}/chat/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Streaming request failed with status ${response.status}`)
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+
+            const chunk = JSON.parse(trimmed) as ChatStreamServerEvent
+            const payload: ChatStreamIpcEvent = {
+              requestId,
+              type: chunk.type
+            }
+
+            if (chunk.type === 'text' && chunk.data) {
+              payload.data = chunk.data
+            } else if (chunk.type === 'audio' && chunk.data) {
+              payload.data = `data:audio/wav;base64,${chunk.data}`
+            } else if (chunk.type === 'done') {
+              payload.reply = chunk.reply ?? ''
+            } else if (chunk.type === 'error') {
+              payload.error = chunk.error ?? 'Unknown streaming error'
+            }
+
+            sender.send('chat-stream-event', payload)
+          }
+        }
+
+        const tail = buffer.trim()
+        if (tail) {
+          const chunk = JSON.parse(tail) as ChatStreamServerEvent
+          sender.send('chat-stream-event', {
+            requestId,
+            type: chunk.type,
+            data:
+              chunk.type === 'audio'
+                ? chunk.data
+                  ? `data:audio/wav;base64,${chunk.data}`
+                  : undefined
+                : chunk.data,
+            reply: chunk.type === 'done' ? chunk.reply : undefined,
+            error: chunk.type === 'error' ? chunk.error : undefined
+          } satisfies ChatStreamIpcEvent)
+        }
+      } catch (error) {
+        sender.send('chat-stream-event', {
+          requestId,
+          type: 'error',
+          error:
+            error instanceof Error ? error.message : 'Unexpected error while streaming chat response'
+        } satisfies ChatStreamIpcEvent)
+      }
+    })()
+
+    return requestId
   })
 
   // Get TTS audio → return as base64 so renderer can play it
