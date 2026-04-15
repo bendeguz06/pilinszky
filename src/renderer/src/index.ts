@@ -142,8 +142,19 @@ function setupDevLipSyncPanel(targetAvatar: AvatarRenderer) {
   const previewBtn = document.createElement('button');
   previewBtn.type = 'button';
   previewBtn.textContent = 'Preview';
-  previewBtn.addEventListener('click', () => {
-    targetAvatar.playLipSyncText(previewInput.value);
+  previewBtn.addEventListener('click', async () => {
+    const previewText = previewInput.value.trim();
+    if (!previewText) {
+      return;
+    }
+
+    try {
+      const audio = await window.pilinszky.speak(previewText);
+      void targetAvatar.playLipSyncAudio(audio);
+    } catch (err) {
+      console.error('Lip-sync preview speech synthesis failed:', err);
+      targetAvatar.playLipSyncText(previewText);
+    }
   });
 
   previewWrap.appendChild(previewInput);
@@ -524,10 +535,7 @@ async function send() {
     const { reply, audio } = await window.pilinszky.chat(message, history)
     history.push({ role: 'assistant', content: reply })
     appendMessage('assistant', reply)
-    avatar.playLipSyncText(reply)
-
-    const audioElement = new Audio(audio)
-    audioElement.play().then(null);
+    void avatar.playLipSyncAudio(audio)
   } catch (err) {
     appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
     console.error(err)
