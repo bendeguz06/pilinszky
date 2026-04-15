@@ -59,7 +59,10 @@ SYSTEM_PROMPT = (
 )
 
 XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
-AUDIO_FLUSH_CHAR_THRESHOLD = 120
+AUDIO_MIN_FLUSH_CHAR_THRESHOLD = 280
+AUDIO_SOFT_FLUSH_CHAR_THRESHOLD = 180
+AUDIO_MAX_FLUSH_CHAR_THRESHOLD = 520
+AUDIO_MIN_SENTENCE_COUNT = 2
 ELLIPSIS_TRIPLE_PLACEHOLDER = "__ELLIPSIS_TRIPLE__"
 ELLIPSIS_SINGLE_PLACEHOLDER = "__ELLIPSIS_SINGLE__"
 
@@ -260,12 +263,22 @@ def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
 
 def should_flush_audio(buffer: str) -> bool:
     stripped = buffer.rstrip()
+    if not stripped:
+        return False
     if stripped.endswith("...") or stripped.endswith("…"):
         return False
+    normalized = re.sub(r"\s+", " ", stripped).strip()
+    if len(normalized) >= AUDIO_MAX_FLUSH_CHAR_THRESHOLD:
+        return True
+    sentence_count = len(re.findall(r"[.!?](?=\s|$)", stripped))
+    ends_with_sentence_boundary = stripped.endswith((".", "!", "?"))
+    if ends_with_sentence_boundary and len(normalized) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD:
+        return True
+    if sentence_count >= AUDIO_MIN_SENTENCE_COUNT and len(normalized) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD:
+        return True
     return (
-        len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
-        or stripped.endswith((".", "!", "?"))
-        or stripped.endswith("\n")
+        len(normalized) >= AUDIO_MIN_FLUSH_CHAR_THRESHOLD
+        or ("\n\n" in stripped and len(normalized) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD)
     )
 
 

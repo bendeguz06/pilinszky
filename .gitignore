@@ -7,3 +7,6 @@ out
 .env
 .google
 backend/chroma_db
+backend/__pycache__/
+**/__pycache__/
+*.pyc
