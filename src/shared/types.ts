@@ -29,3 +29,9 @@ export type ChatStreamIpcEvent =
   | { requestId: string; type: 'audio'; data: string }
   | { requestId: string; type: 'done'; reply: string }
   | { requestId: string; type: 'error'; error: string }
+
+export type ChatStreamClientEvent =
+  | { type: 'text'; data: string }
+  | { type: 'audio'; data: string }
+  | { type: 'done'; reply: string }
+  | { type: 'error'; error: string }

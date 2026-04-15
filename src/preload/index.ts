@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { ChatStreamIpcEvent, Message, TranscriptionPayload } from '../shared/types'
+import type {
+  ChatStreamClientEvent,
+  ChatStreamIpcEvent,
+  Message,
+  TranscriptionPayload
+} from '../shared/types'
 
 // Custom APIs for renderer
 const api = {}
@@ -28,7 +33,7 @@ contextBridge.exposeInMainWorld('pilinszky', {
   chatStream: async (
     message: string,
     history: Message[],
-    onEvent: (event: Omit<ChatStreamIpcEvent, 'requestId'>) => void
+    onEvent: (event: ChatStreamClientEvent) => void
   ) => {
     const requestId = await ipcRenderer.invoke('chat-stream-start', { message, history })
 

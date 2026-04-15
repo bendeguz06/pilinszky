@@ -606,6 +606,9 @@ async function send() {
 
     const reply = await window.pilinszky.chatStream(message, history, (event) => {
       if (event.type === 'text') {
+        if (!assistantMessageEl) {
+          return
+        }
         partialReply += event.data
         assistantMessageEl.textContent = partialReply
         messagesEl.scrollTop = messagesEl.scrollHeight
