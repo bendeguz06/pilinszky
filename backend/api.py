@@ -1,15 +1,19 @@
 import base64
 import glob
+import json
+import logging
 import os
 import re
 import tempfile
+from collections.abc import Generator
+from json import JSONDecodeError
 
 import chromadb
 import requests
 import torch
 import torchaudio
 from fastapi import FastAPI
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from TTS.api import TTS  # new repo: https://github.com/idiap/coqui-ai-TTS
 
@@ -35,8 +39,12 @@ SYSTEM_PROMPT = (
 )
 
 XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
+AUDIO_FLUSH_CHAR_THRESHOLD = 120
+ELLIPSIS_TRIPLE_PLACEHOLDER = "__ELLIPSIS_TRIPLE__"
+ELLIPSIS_SINGLE_PLACEHOLDER = "__ELLIPSIS_SINGLE__"
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
 
 # ChromaDB client
 _chroma_collection = None
@@ -75,8 +83,14 @@ def get_tts():
 
 def split_into_chunks(text: str, limit: int = XTTS_CHAR_LIMIT) -> list[str]:
     """Split text into chunks under `limit` chars, breaking at sentence boundaries."""
-    # Split on sentence-ending punctuation, keeping the delimiter
-    sentences = re.split(r'(?<=[.!?…\u2014])\s+', text)
+    preserved = (
+        text.replace("...", ELLIPSIS_TRIPLE_PLACEHOLDER).replace(
+            "…", ELLIPSIS_SINGLE_PLACEHOLDER
+        )
+    )
+    # Split on sentence-ending punctuation, keeping the delimiter.
+    # Ellipses are preserved and handled as continuation, not hard boundary.
+    sentences = re.split(r"(?<=[.!?\u2014])\s+", preserved)
     chunks = []
     current = ""
     for sentence in sentences:
@@ -103,7 +117,13 @@ def split_into_chunks(text: str, limit: int = XTTS_CHAR_LIMIT) -> list[str]:
                 current = sentence
     if current:
         chunks.append(current)
-    return [c for c in chunks if c.strip()]
+    return [
+        c.replace(ELLIPSIS_TRIPLE_PLACEHOLDER, "...").replace(
+            ELLIPSIS_SINGLE_PLACEHOLDER, "…"
+        )
+        for c in chunks
+        if c.strip()
+    ]
 
 
 def synthesize_text(text: str) -> bytes:
@@ -161,8 +181,7 @@ def embed(text: str) -> list[float]:
     return res.json()["embeddings"][0]
 
 
-@app.post("/chat")
-def chat(req: ChatRequest):
+def build_messages(req: ChatRequest) -> list[dict[str, str]]:
     query_embedding = embed(req.message)
     collection = get_collection()
     results = collection.query(
@@ -190,7 +209,53 @@ def chat(req: ChatRequest):
     for m in req.history:
         messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": req.message})
+    return messages
 
+
+def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
+    with requests.post(
+        f"{OLLAMA_URL}/api/chat",
+        json={
+            "model": LLM_MODEL,
+            "messages": messages,
+            "stream": True,
+            "options": {"num_ctx": 2048, "num_gpu": 49},
+        },
+        stream=True,
+        timeout=(10, 300),
+    ) as res:
+        res.raise_for_status()
+        for line in res.iter_lines():
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+            except JSONDecodeError:
+                logger.warning("Skipping malformed Ollama stream line")
+                continue
+            token = chunk.get("message", {}).get("content", "")
+            if token:
+                yield token
+
+
+def should_flush_audio(buffer: str) -> bool:
+    stripped = buffer.rstrip()
+    if stripped.endswith("...") or stripped.endswith("…"):
+        return False
+    return (
+        len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
+        or stripped.endswith((".", "!", "?"))
+        or stripped.endswith("\n")
+    )
+
+
+def ndjson_event(payload: dict[str, str]) -> str:
+    return json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    messages = build_messages(req)
     res = requests.post(
         f"{OLLAMA_URL}/api/chat",
         json={
@@ -208,6 +273,48 @@ def chat(req: ChatRequest):
     wav_bytes = synthesize_text(tts_text)
 
     return {"reply": reply, "audio": base64.b64encode(wav_bytes).decode("utf-8")}
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest):
+    messages = build_messages(req)
+
+    def stream():
+        buffer = ""
+        full_reply = ""
+        try:
+            for token in llm_stream(messages):
+                full_reply += token
+                buffer += token
+                yield ndjson_event({"type": "text", "data": token})
+
+                if should_flush_audio(buffer):
+                    tts_text = buffer.replace("\n", " ").strip()
+                    if tts_text:
+                        wav_bytes = synthesize_text(tts_text)
+                        yield ndjson_event(
+                            {
+                                "type": "audio",
+                                "data": base64.b64encode(wav_bytes).decode("utf-8"),
+                            }
+                        )
+                    buffer = ""
+
+            remaining = buffer.replace("\n", " ").strip()
+            if remaining:
+                wav_bytes = synthesize_text(remaining)
+                yield ndjson_event(
+                    {"type": "audio", "data": base64.b64encode(wav_bytes).decode("utf-8")}
+                )
+
+            yield ndjson_event({"type": "done", "reply": full_reply})
+        except Exception:
+            logger.exception("Streaming chat pipeline failed")
+            yield ndjson_event(
+                {"type": "error", "error": "A válasz streamelése közben hiba történt."}
+            )
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
 @app.post("/tts")

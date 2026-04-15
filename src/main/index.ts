@@ -1,16 +1,23 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
 import { SpeechClient } from '@google-cloud/speech'
 import { autoUpdater } from 'electron-updater'
-import type { ChatResponse, Message, TranscriptionPayload } from '../shared/types'
+import type {
+  ChatStreamIpcEvent,
+  ChatStreamServerEvent,
+  Message,
+  TranscriptionPayload
+} from '../shared/types'
 import * as dotenv from 'dotenv'
 dotenv.config()
 
 const POD_URL = process.env.POD_URL
 let speechClient: SpeechClient | null = null
+const activeChatStreamControllers = new Map<string, AbortController>()
 
 function getSpeechClient(): SpeechClient {
   if (speechClient) {
@@ -43,6 +50,29 @@ function getGoogleAudioEncodingFromMimeType(mimeType: string) {
   throw new Error(
     `Unsupported audio mime type for Google STT: ${mimeType}. Supported types: webm, ogg, wav, flac`
   )
+}
+
+function toIpcEvent(requestId: string, chunk: ChatStreamServerEvent): ChatStreamIpcEvent {
+  if (chunk.type === 'text') {
+    return { requestId, type: 'text', data: chunk.data }
+  }
+
+  if (chunk.type === 'audio') {
+    return { requestId, type: 'audio', data: `data:audio/wav;base64,${chunk.data}` }
+  }
+
+  if (chunk.type === 'done') {
+    if (chunk.reply === undefined || chunk.reply === null) {
+      return {
+        requestId,
+        type: 'error',
+        error: 'Streaming response completed without a final reply payload.'
+      }
+    }
+    return { requestId, type: 'done', reply: chunk.reply }
+  }
+
+  return { requestId, type: 'error', error: chunk.error ?? 'Unknown streaming error' }
 }
 
 function createWindow(): void {
@@ -94,9 +124,103 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('chat', async (_, payload: { message: string; history: Message[] }) => {
-    const res = await axios.post<ChatResponse>(`${POD_URL}/chat`, payload)
+    const res = await axios.post<{ reply: string; audio: string }>(`${POD_URL}/chat`, payload)
     const { reply, audio } = res.data
     return { reply, audioSrc: `data:audio/wav;base64,${audio}` }
+  })
+
+  ipcMain.handle('chat-stream-start', async (event, payload: { message: string; history: Message[] }) => {
+    const requestId = randomUUID()
+    const sender = event.sender
+
+    void (async () => {
+      const abortController = new AbortController()
+      activeChatStreamControllers.set(requestId, abortController)
+
+      try {
+        const response = await fetch(`${POD_URL}/chat/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: abortController.signal
+        })
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Streaming request failed with status ${response.status}`)
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+
+            let chunk: ChatStreamServerEvent
+            try {
+              chunk = JSON.parse(trimmed) as ChatStreamServerEvent
+            } catch {
+              sender.send('chat-stream-event', {
+                requestId,
+                type: 'error',
+                error: 'Received malformed streaming payload from backend.'
+              } satisfies ChatStreamIpcEvent)
+              continue
+            }
+            sender.send('chat-stream-event', toIpcEvent(requestId, chunk))
+          }
+        }
+
+        const tail = buffer.trim()
+        if (tail) {
+          let chunk: ChatStreamServerEvent
+          try {
+            chunk = JSON.parse(tail) as ChatStreamServerEvent
+          } catch {
+            sender.send('chat-stream-event', {
+              requestId,
+              type: 'error',
+              error: 'Received malformed final streaming payload from backend.'
+            } satisfies ChatStreamIpcEvent)
+            return
+          }
+          sender.send('chat-stream-event', toIpcEvent(requestId, chunk))
+        }
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          return
+        }
+        sender.send('chat-stream-event', {
+          requestId,
+          type: 'error',
+          error:
+            error instanceof Error ? error.message : 'Unexpected error while streaming chat response'
+        } satisfies ChatStreamIpcEvent)
+      } finally {
+        activeChatStreamControllers.delete(requestId)
+      }
+    })()
+
+    return requestId
+  })
+
+  ipcMain.handle('chat-stream-cancel', async (_, requestId: string) => {
+    const controller = activeChatStreamControllers.get(requestId)
+    if (!controller) {
+      return false
+    }
+    controller.abort()
+    activeChatStreamControllers.delete(requestId)
+    return true
   })
 
   // Get TTS audio → return as base64 so renderer can play it

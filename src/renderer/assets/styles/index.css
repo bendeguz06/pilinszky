@@ -188,6 +188,15 @@ body {
   cursor: default;
 }
 
+#mic-button[data-mode='stop'] {
+  border-color: #8f4c4c;
+  color: #d9aaaa;
+}
+
+#mic-button[data-mode='stop'] #mic-indicator {
+  background: #cf5b5b;
+}
+
 .mic-picker {
   position: fixed;
   z-index: 20;
@@ -363,4 +372,3 @@ body {
   padding: 0.35rem 0.55rem;
   cursor: pointer;
 }
-
