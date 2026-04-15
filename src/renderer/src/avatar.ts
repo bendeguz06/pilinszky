@@ -18,6 +18,31 @@ const defaultLipSyncSettings: LipSyncSettings = {
   minStepMs: 24
 };
 
+const audioLipSyncConfig = {
+  fftSize: 1024,
+  smoothing: 0.75,
+  silenceRmsThreshold: 0.016,
+  bandsHz: {
+    low: [80, 450],
+    mid: [450, 1800],
+    high: [1800, 4200],
+    sibilant: [4200, 7600]
+  },
+  ratios: {
+    sibilant: 0.28,
+    highForSibilant: 0.2,
+    lowRounded: 0.44,
+    lowOpen: 0.34,
+    midOpen: 0.22,
+    midFront: 0.34,
+    highFront: 0.26
+  },
+  rms: {
+    rounded: 0.045,
+    open: 0.05
+  }
+} as const;
+
 const requiredAvatarParts = <const>["head", "leye", "lbeye", "reye", "rbeye"];
 const optionalLipSyncParts = <const>["head_a", "head_ei", "head_ou", "head_fv", "head_consonant"];
 const loadableAvatarParts = <const>[...requiredAvatarParts, ...optionalLipSyncParts];
@@ -350,9 +375,20 @@ export class AvatarRenderer {
     }
 
     if (this.audioLipSyncContext) {
-      void this.audioLipSyncContext.close();
-      this.audioLipSyncContext = null;
+      this.audioLipSyncContext.suspend().catch((error) => {
+        console.warn('Failed to suspend audio lip-sync context:', error);
+      });
     }
+  }
+
+  private getOrCreateAudioLipSyncContext(): AudioContext {
+    if (this.audioLipSyncContext && this.audioLipSyncContext.state !== 'closed') {
+      return this.audioLipSyncContext;
+    }
+
+    const context = new AudioContext();
+    this.audioLipSyncContext = context;
+    return context;
   }
 
   private stepLipSyncFrame() {
@@ -438,7 +474,7 @@ export class AvatarRenderer {
       sumSquares += sample * sample;
     }
     const rms = Math.sqrt(sumSquares / waveformData.length);
-    if (rms < 0.016) {
+    if (rms < audioLipSyncConfig.silenceRmsThreshold) {
       return null;
     }
 
@@ -461,10 +497,10 @@ export class AvatarRenderer {
       return count > 0 ? sum / count : 0;
     };
 
-    const low = averageBand(80, 450);
-    const mid = averageBand(450, 1800);
-    const high = averageBand(1800, 4200);
-    const sibilant = averageBand(4200, 7600);
+    const low = averageBand(audioLipSyncConfig.bandsHz.low[0], audioLipSyncConfig.bandsHz.low[1]);
+    const mid = averageBand(audioLipSyncConfig.bandsHz.mid[0], audioLipSyncConfig.bandsHz.mid[1]);
+    const high = averageBand(audioLipSyncConfig.bandsHz.high[0], audioLipSyncConfig.bandsHz.high[1]);
+    const sibilant = averageBand(audioLipSyncConfig.bandsHz.sibilant[0], audioLipSyncConfig.bandsHz.sibilant[1]);
     const total = Math.max(1, low + mid + high + sibilant);
 
     const lowRatio = low / total;
@@ -472,19 +508,26 @@ export class AvatarRenderer {
     const highRatio = high / total;
     const sibilantRatio = sibilant / total;
 
-    if (sibilantRatio > 0.28 && highRatio > 0.2) {
+    if (
+      sibilantRatio > audioLipSyncConfig.ratios.sibilant &&
+      highRatio > audioLipSyncConfig.ratios.highForSibilant
+    ) {
       return 'head_fv';
     }
 
-    if (lowRatio > 0.44 && rms > 0.045) {
+    if (lowRatio > audioLipSyncConfig.ratios.lowRounded && rms > audioLipSyncConfig.rms.rounded) {
       return 'head_ou';
     }
 
-    if (lowRatio > 0.34 && midRatio > 0.22 && rms > 0.05) {
+    if (
+      lowRatio > audioLipSyncConfig.ratios.lowOpen &&
+      midRatio > audioLipSyncConfig.ratios.midOpen &&
+      rms > audioLipSyncConfig.rms.open
+    ) {
       return 'head_a';
     }
 
-    if (midRatio > 0.34 || highRatio > 0.26) {
+    if (midRatio > audioLipSyncConfig.ratios.midFront || highRatio > audioLipSyncConfig.ratios.highFront) {
       return 'head_ei';
     }
 
@@ -499,10 +542,10 @@ export class AvatarRenderer {
 
     this.stopLipSync();
 
-    const audioContext = new AudioContext();
+    const audioContext = this.getOrCreateAudioLipSyncContext();
     const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.75;
+    analyser.fftSize = audioLipSyncConfig.fftSize;
+    analyser.smoothingTimeConstant = audioLipSyncConfig.smoothing;
 
     const audioElement = new Audio(audioSrc);
     const source = audioContext.createMediaElementSource(audioElement);
@@ -535,6 +578,8 @@ export class AvatarRenderer {
 
       if (!currentElement.paused && !currentElement.ended) {
         this.audioLipSyncRafId = requestAnimationFrame(drive);
+      } else if (currentElement.ended) {
+        this.stopLipSync();
       }
     };
 

@@ -142,19 +142,8 @@ function setupDevLipSyncPanel(targetAvatar: AvatarRenderer) {
   const previewBtn = document.createElement('button');
   previewBtn.type = 'button';
   previewBtn.textContent = 'Preview';
-  previewBtn.addEventListener('click', async () => {
-    const previewText = previewInput.value.trim();
-    if (!previewText) {
-      return;
-    }
-
-    try {
-      const audio = await window.pilinszky.speak(previewText);
-      void targetAvatar.playLipSyncAudio(audio);
-    } catch (err) {
-      console.error('Lip-sync preview speech synthesis failed:', err);
-      targetAvatar.playLipSyncText(previewText);
-    }
+  previewBtn.addEventListener('click', () => {
+    targetAvatar.playLipSyncText(previewInput.value);
   });
 
   previewWrap.appendChild(previewInput);
