@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { Message } from '../../src/shared/types'
+import type { Message, TranscriptionPayload } from '../shared/types'
 
 // Custom APIs for renderer
 const api = {}
@@ -23,5 +23,14 @@ if (process.contextIsolated) {
 }
 
 contextBridge.exposeInMainWorld('pilinszky', {
-  chat: (message: string, history: Message[]) => ipcRenderer.invoke('chat', { message, history })
+  chat: (message: string, history: Message[]) => ipcRenderer.invoke('chat', { message, history }),
+
+  transcribe: (audio: ArrayBuffer, mimeType: string) => {
+    const payload: TranscriptionPayload = {
+      audioBase64: Buffer.from(new Uint8Array(audio)).toString('base64'),
+      mimeType
+    }
+
+    return ipcRenderer.invoke('transcribe', payload)
+  }
 })

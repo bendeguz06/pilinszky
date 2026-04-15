@@ -2,6 +2,9 @@ import { type Message } from "../../shared/types";
 import { AvatarRenderer, type LipSyncSettings } from './avatar'
 
 const isDev = import.meta.env.DEV;
+const SILENCE_DETECTION_DURATION_MS = 600;
+const SILENCE_DETECTION_RMS_THRESHOLD = 0.02;
+const SILENCE_DETECTION_POLL_INTERVAL_MS = 100;
 
 const history: Message[] = [];
 
@@ -12,11 +15,28 @@ const micBtnEl = document.querySelector<HTMLButtonElement>("#mic-button")!;
 const avatarCanvasEl = document.querySelector<HTMLCanvasElement>('#avatar-canvas')!
 
 type MicState = 'idle' | 'active' | 'blocked' | 'unsupported';
-const micStorageKey = 'pilinszky.micDeviceId';
 let micState: MicState = 'idle';
-let micStream: MediaStream | null = null;
-let selectedMicDeviceId: string | null = localStorage.getItem(micStorageKey);
-let micPickerEl: HTMLDivElement | null = null;
+let speechRecognition: SpeechRecognition | null = null;
+const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+const transcriptionMimeTypeCandidates = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/ogg;codecs=opus',
+  'audio/ogg'
+];
+let localRecorder: MediaRecorder | null = null;
+let localRecorderMimeType = 'audio/webm';
+let localRecorderChunks: BlobPart[] = [];
+let localRecorderStream: MediaStream | null = null;
+let speechRecognitionMonitorStream: MediaStream | null = null;
+let micSilenceAnalyserContext: AudioContext | null = null;
+let micSilenceAnalyser: AnalyserNode | null = null;
+let micSilenceBuffer: Uint8Array<ArrayBuffer> | null = null;
+let micSilencePollTimer: number | null = null;
+let micSilenceStartTime: number | null = null;
+let micDetectedSpeech = false;
+let speechRecognitionStoppingDueToSilence = false;
+let speechRecognitionGotFinalResult = false;
 
 const avatar = new AvatarRenderer(avatarCanvasEl, "pilinszky");
 const lipSyncSettingsStorageKey = 'pilinszky.dev.lipsyncSettings';
@@ -142,158 +162,344 @@ function setMicState(state: MicState, title?: string) {
   micBtnEl.dataset.state = state;
 
   const defaultTitleByState: Record<MicState, string> = {
-    idle: 'Mikrofon kiválasztása és bekapcsolása',
-    active: 'Mikrofon aktív (kattintás a leállításhoz)',
-    blocked: 'Mikrofon nem érhető el',
-    unsupported: 'A böngésző környezet nem támogat mikrofon hozzáférést'
+    idle: 'Beszédfelismerés indítása magyar nyelven',
+    active: 'Beszédfelismerés aktív (kattintás a leállításhoz)',
+    blocked: 'A beszédfelismerés nem érhető el',
+    unsupported: 'A böngésző környezet nem támogatja a beszédfelismerést'
   };
 
   micBtnEl.title = title ?? defaultTitleByState[state];
 }
 
-function stopMic() {
-  if (micStream) {
-    micStream.getTracks().forEach((track) => track.stop());
-    micStream = null;
+function canUseRecorderTranscriptionFallback(): boolean {
+  return typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+}
+
+function chooseRecorderMimeType(): string {
+  const supported = transcriptionMimeTypeCandidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
+  return supported ?? 'audio/webm';
+}
+
+function stopSpeechRecognitionMonitorStream() {
+  if (!speechRecognitionMonitorStream) {
+    return;
   }
+
+  speechRecognitionMonitorStream.getTracks().forEach((track) => track.stop());
+  speechRecognitionMonitorStream = null;
+}
+
+function stopMicSilenceMonitor() {
+  if (micSilencePollTimer !== null) {
+    window.clearInterval(micSilencePollTimer);
+    micSilencePollTimer = null;
+  }
+
+  if (micSilenceAnalyserContext) {
+    void micSilenceAnalyserContext.close();
+  }
+
+  micSilenceAnalyserContext = null;
+  micSilenceAnalyser = null;
+  micSilenceBuffer = null;
+  micSilenceStartTime = null;
+  micDetectedSpeech = false;
+}
+
+async function startMicSilenceMonitor(stream: MediaStream, onSilence: () => void) {
+  stopMicSilenceMonitor();
+
+  const audioContext = new AudioContext();
+  const source = audioContext.createMediaStreamSource(stream);
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+
+  micSilenceAnalyserContext = audioContext;
+  micSilenceAnalyser = analyser;
+  micSilenceBuffer = new Uint8Array(analyser.fftSize);
+  micSilenceStartTime = null;
+  micDetectedSpeech = false;
+
+  micSilencePollTimer = window.setInterval(() => {
+    if (!micSilenceAnalyser || !micSilenceBuffer) {
+      return;
+    }
+
+    micSilenceAnalyser.getByteTimeDomainData(micSilenceBuffer);
+
+    let sumSquares = 0;
+    for (let index = 0; index < micSilenceBuffer.length; index += 1) {
+      const sample = (micSilenceBuffer[index] - 128) / 128;
+      sumSquares += sample * sample;
+    }
+
+    const rms = Math.sqrt(sumSquares / micSilenceBuffer.length);
+    const now = Date.now();
+
+    if (rms >= SILENCE_DETECTION_RMS_THRESHOLD) {
+      micDetectedSpeech = true;
+      micSilenceStartTime = null;
+      return;
+    }
+
+    if (!micDetectedSpeech) {
+      return;
+    }
+
+    if (micSilenceStartTime === null) {
+      micSilenceStartTime = now;
+      return;
+    }
+
+    if (now - micSilenceStartTime >= SILENCE_DETECTION_DURATION_MS) {
+      stopMicSilenceMonitor();
+      onSilence();
+    }
+  }, SILENCE_DETECTION_POLL_INTERVAL_MS);
+}
+
+function clearLocalRecorderState() {
+  if (localRecorderStream) {
+    localRecorderStream.getTracks().forEach((track) => track.stop());
+    localRecorderStream = null;
+  }
+
+  stopMicSilenceMonitor();
+  localRecorder = null;
+  localRecorderChunks = [];
+}
+
+function stopLocalRecorder() {
+  if (!localRecorder) {
+    clearLocalRecorderState();
+    return;
+  }
+
+  const recorder = localRecorder;
+  localRecorder = null;
+  if (recorder.state !== 'inactive') {
+    recorder.stop();
+  }
+}
+
+async function startRecorderTranscriptionFallback(origin: string) {
+  if (!canUseRecorderTranscriptionFallback()) {
+    setMicState('unsupported', 'A környezet nem támogatja a rögzítés alapú átírást');
+    return;
+  }
+
+  if (localRecorder) {
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const mimeType = chooseRecorderMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+    localRecorder = recorder;
+    localRecorderMimeType = recorder.mimeType || mimeType || 'audio/webm';
+    localRecorderChunks = [];
+    localRecorderStream = stream;
+    setMicState('active', 'Rögzítés fut felhős átíráshoz');
+    await startMicSilenceMonitor(stream, () => {
+      if (localRecorder === recorder) {
+        stopLocalRecorder();
+      }
+    });
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        localRecorderChunks.push(event.data);
+      }
+    };
+
+    recorder.onerror = (event) => {
+      console.error('Local recorder failed:', event.error);
+      clearLocalRecorderState();
+      setMicState('blocked', 'Lokális rögzítési hiba történt');
+    };
+
+    recorder.onstop = async () => {
+      const chunks = [...localRecorderChunks];
+      clearLocalRecorderState();
+
+      if (chunks.length === 0) {
+        setMicState('idle', 'Nem érkezett rögzített hang');
+        return;
+      }
+
+      try {
+        const blob = new Blob(chunks, { type: localRecorderMimeType });
+        const audioBuffer = await blob.arrayBuffer();
+        const transcript = (await window.pilinszky.transcribe(audioBuffer, localRecorderMimeType)).trim();
+
+        if (!transcript) {
+          setMicState('idle', 'Nem sikerült beszédet felismerni');
+          return;
+        }
+
+        inputEl.value = transcript;
+        await send();
+        setMicState('idle');
+      } catch (err) {
+        console.error(`Recorder transcription fallback failed (${origin}):`, err);
+        setMicState('blocked', 'Átírási hiba történt. Ellenőrizd az STT szolgáltatást.');
+      }
+    };
+
+    recorder.start();
+  } catch (err) {
+    console.error(`Recorder transcription fallback capture failed (${origin}):`, err);
+    setMicState('blocked', 'Mikrofon engedély vagy rögzítési hiba');
+  }
+}
+
+function stopMic() {
+  stopMicSilenceMonitor();
+  stopSpeechRecognitionMonitorStream();
+  speechRecognitionGotFinalResult = false;
+  speechRecognitionStoppingDueToSilence = false;
+
+  const currentRecognition = speechRecognition;
+  speechRecognition = null;
+
+  if (currentRecognition) {
+    currentRecognition.onstart = null;
+    currentRecognition.onend = null;
+    currentRecognition.onerror = null;
+    currentRecognition.onresult = null;
+
+    try {
+      currentRecognition.abort();
+    } catch (err) {
+      console.warn('Failed to stop speech recognition:', err);
+    }
+  }
+
+  stopLocalRecorder();
 
   if (micState !== 'unsupported') {
     setMicState('idle');
   }
 }
 
-async function getAudioInputDevices(): Promise<MediaDeviceInfo[]> {
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  return devices.filter((device) => device.kind === 'audioinput');
-}
+function getSpeechRecognitionTranscript(event: SpeechRecognitionEvent): string {
+  const transcripts: string[] = [];
 
-async function chooseMicDevice(devices: MediaDeviceInfo[]): Promise<string | null> {
-  if (devices.length === 0) {
-    return null;
+  for (let index = event.resultIndex; index < event.results.length; index += 1) {
+    const result = event.results[index];
+    if (!result.isFinal) {
+      continue;
+    }
+
+    const transcript = result[0]?.transcript.trim();
+    if (transcript) {
+      transcripts.push(transcript);
+    }
   }
 
-  if (devices.length === 1) {
-    return devices[0].deviceId;
-  }
-
-  if (micPickerEl) {
-    micPickerEl.remove();
-    micPickerEl = null;
-  }
-
-  return new Promise<string | null>((resolve) => {
-    const picker = document.createElement('div');
-    picker.className = 'mic-picker';
-    picker.setAttribute('role', 'dialog');
-    picker.setAttribute('aria-label', 'Mikrofon kiválasztása');
-
-    const title = document.createElement('p');
-    title.className = 'mic-picker-title';
-    title.textContent = 'Mikrofon kiválasztása';
-    picker.appendChild(title);
-
-    const list = document.createElement('div');
-    list.className = 'mic-picker-list';
-
-    const activeIndex = Math.max(0, devices.findIndex((device) => device.deviceId === selectedMicDeviceId));
-
-    const close = (deviceId: string | null) => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('keydown', handleEscape);
-      picker.remove();
-      if (micPickerEl === picker) {
-        micPickerEl = null;
-      }
-      resolve(deviceId);
-    };
-
-    const handleOutsideClick = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node) || !picker.contains(target)) {
-        close(null);
-      }
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        close(null);
-      }
-    };
-
-    devices.forEach((device, index) => {
-      const option = document.createElement('button');
-      option.type = 'button';
-      option.className = 'mic-picker-option';
-      option.textContent = device.label || `Mikrofon ${index + 1}`;
-      option.dataset.selected = String(index === activeIndex);
-      option.addEventListener('click', () => close(device.deviceId));
-      list.appendChild(option);
-    });
-
-    picker.appendChild(list);
-    document.body.appendChild(picker);
-    micPickerEl = picker;
-
-    const rect = micBtnEl.getBoundingClientRect();
-    const pickerRect = picker.getBoundingClientRect();
-    const gap = 8;
-    const rawLeft = rect.left;
-    const maxLeft = window.innerWidth - pickerRect.width - 8;
-    const left = Math.min(Math.max(8, rawLeft), Math.max(8, maxLeft));
-
-    const topAbove = rect.top - pickerRect.height - gap;
-    const topBelow = rect.bottom + gap;
-    const maxTop = window.innerHeight - pickerRect.height - 8;
-    const top = topAbove >= 8
-      ? topAbove
-      : Math.min(Math.max(8, topBelow), Math.max(8, maxTop));
-
-    picker.style.left = `${left}px`;
-    picker.style.top = `${top}px`;
-
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('keydown', handleEscape);
-  });
+  return transcripts.join(' ').trim();
 }
 
 async function startMic() {
-  if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
-    setMicState('unsupported');
+  if (!SpeechRecognitionCtor) {
+    await startRecorderTranscriptionFallback('speech-unsupported');
     return;
   }
 
   try {
-    let deviceId = selectedMicDeviceId;
-    const knownDevices = await getAudioInputDevices();
+    stopMic();
 
-    if (!deviceId || !knownDevices.some((device) => device.deviceId === deviceId)) {
-      const chosen = await chooseMicDevice(knownDevices);
-      if (!chosen) {
-        setMicState('idle', 'Nincs kiválasztott mikrofon');
+    const recognition = new SpeechRecognitionCtor();
+    speechRecognitionGotFinalResult = false;
+    speechRecognitionStoppingDueToSilence = false;
+    speechRecognition = recognition;
+    recognition.lang = 'hu-HU';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setMicState('active');
+    };
+
+    recognition.onend = () => {
+      stopMicSilenceMonitor();
+      stopSpeechRecognitionMonitorStream();
+      const stoppedDueToSilence = speechRecognitionStoppingDueToSilence;
+      speechRecognitionStoppingDueToSilence = false;
+
+      if (speechRecognition === recognition) {
+        speechRecognition = null;
+      }
+
+      if (
+        !speechRecognitionGotFinalResult &&
+        !stoppedDueToSilence &&
+        !localRecorder &&
+        micState !== 'unsupported' &&
+        micState !== 'blocked'
+      ) {
+        void startRecorderTranscriptionFallback('speech-ended-without-result');
         return;
       }
-      deviceId = chosen;
+
+      if (!localRecorder && micState !== 'unsupported' && micState !== 'blocked') {
+        setMicState('idle');
+      }
+    };
+
+    recognition.onerror = async (event) => {
+      console.error('Speech recognition failed:', event.error, event.message);
+      stopMicSilenceMonitor();
+      stopSpeechRecognitionMonitorStream();
+
+      if (speechRecognition === recognition) {
+        speechRecognition = null;
+      }
+
+      await startRecorderTranscriptionFallback(`speech-error:${event.error}`);
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = getSpeechRecognitionTranscript(event);
+      if (!transcript) {
+        return;
+      }
+
+      speechRecognitionGotFinalResult = true;
+      stopMic();
+      inputEl.value = transcript;
+      void send();
+    };
+
+    try {
+      const monitorStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      speechRecognitionMonitorStream = monitorStream;
+      await startMicSilenceMonitor(monitorStream, () => {
+        if (speechRecognition !== recognition || speechRecognitionGotFinalResult) {
+          return;
+        }
+
+        speechRecognitionStoppingDueToSilence = true;
+        try {
+          recognition.stop();
+        } catch (err) {
+          console.warn('Failed to stop speech recognition on silence:', err);
+        }
+      });
+    } catch (err) {
+      console.warn('Could not start silence monitor for speech recognition:', err);
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-      video: false
-    });
-
-    stopMic();
-    micStream = stream;
-
-    const activeTrack = stream.getAudioTracks()[0];
-    const activeDeviceId = activeTrack?.getSettings().deviceId ?? deviceId;
-    if (activeDeviceId) {
-      selectedMicDeviceId = activeDeviceId;
-      localStorage.setItem(micStorageKey, activeDeviceId);
-    }
-
+    recognition.start();
     setMicState('active');
   } catch (err) {
-    console.error('Microphone access failed:', err);
-    setMicState('blocked', 'Mikrofon engedély vagy eszköz hiba');
+    console.error('Speech recognition access failed:', err);
+    speechRecognition = null;
+    await startRecorderTranscriptionFallback('speech-start-exception');
   }
 }
 
@@ -318,10 +524,7 @@ async function send() {
     const { reply, audioSrc } = await window.pilinszky.chat(message, history)
     history.push({ role: 'assistant', content: reply })
     appendMessage('assistant', reply)
-    avatar.playLipSyncText(reply)
-
-    const audio = new Audio(audioSrc)
-    audio.play().then(null);
+    void avatar.playLipSyncAudio(audioSrc)
   } catch (err) {
     appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
     console.error(err)
@@ -341,7 +544,7 @@ micBtnEl.addEventListener('click', () => {
     return;
   }
 
-  if (micStream) {
+  if (speechRecognition || localRecorder) {
     stopMic();
     return;
   }
@@ -349,25 +552,14 @@ micBtnEl.addEventListener('click', () => {
   startMic().then(null);
 });
 
-if (!navigator.mediaDevices?.getUserMedia || !navigator.mediaDevices?.enumerateDevices) {
-  setMicState('unsupported');
+if (!SpeechRecognitionCtor) {
+  if (canUseRecorderTranscriptionFallback()) {
+    setMicState('idle', 'Natív beszédfelismerés nélkül felhős STT átírás lesz használva');
+  } else {
+    setMicState('unsupported');
+  }
 } else {
   setMicState('idle');
-
-  navigator.mediaDevices.addEventListener('devicechange', async () => {
-    try {
-      const devices = await getAudioInputDevices();
-      if (selectedMicDeviceId && !devices.some((device) => device.deviceId === selectedMicDeviceId)) {
-        selectedMicDeviceId = null;
-        localStorage.removeItem(micStorageKey);
-        if (micStream) {
-          stopMic();
-        }
-      }
-    } catch (err) {
-      console.error('Failed to refresh microphone devices:', err);
-    }
-  });
 }
 
 // update the mouse position (absolute position relative to dom)

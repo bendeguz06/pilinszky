@@ -18,6 +18,31 @@ const defaultLipSyncSettings: LipSyncSettings = {
   minStepMs: 24
 };
 
+const audioLipSyncConfig = {
+  fftSize: 1024,
+  smoothing: 0.75,
+  silenceRmsThreshold: 0.016,
+  bandsHz: {
+    low: [80, 450],
+    mid: [450, 1800],
+    high: [1800, 4200],
+    sibilant: [4200, 7600]
+  },
+  ratios: {
+    sibilant: 0.28,
+    highForSibilant: 0.2,
+    lowRounded: 0.44,
+    lowOpen: 0.34,
+    midOpen: 0.22,
+    midFront: 0.34,
+    highFront: 0.26
+  },
+  rms: {
+    rounded: 0.045,
+    open: 0.05
+  }
+} as const;
+
 const requiredAvatarParts = <const>["head", "leye", "lbeye", "reye", "rbeye"];
 const optionalLipSyncParts = <const>["head_a", "head_ei", "head_ou", "head_fv", "head_consonant"];
 const loadableAvatarParts = <const>[...requiredAvatarParts, ...optionalLipSyncParts];
@@ -109,6 +134,11 @@ export class AvatarRenderer {
   lipSyncActive: boolean = false;
   activeLipSyncHead: LipSyncHeadPart | null = null;
   lipSyncSettings: LipSyncSettings = { ...defaultLipSyncSettings };
+  audioLipSyncContext: AudioContext | null = null;
+  audioLipSyncElement: HTMLAudioElement | null = null;
+  audioLipSyncSource: MediaElementAudioSourceNode | null = null;
+  audioLipSyncAnalyser: AnalyserNode | null = null;
+  audioLipSyncRafId: number | null = null;
 
   // images
   images: Record<AvatarPart, HTMLImageElement | null> = {
@@ -311,11 +341,54 @@ export class AvatarRenderer {
   }
 
   private stopLipSync() {
+    this.stopAudioDrivenLipSync();
     this.lipSyncActive = false;
     this.lipSyncChars = [];
     this.lipSyncIndex = 0;
     this.lipSyncElapsed = 0;
     this.activeLipSyncHead = null;
+  }
+
+  private stopAudioDrivenLipSync() {
+    if (this.audioLipSyncRafId !== null) {
+      cancelAnimationFrame(this.audioLipSyncRafId);
+      this.audioLipSyncRafId = null;
+    }
+
+    if (this.audioLipSyncSource) {
+      this.audioLipSyncSource.disconnect();
+      this.audioLipSyncSource = null;
+    }
+
+    if (this.audioLipSyncAnalyser) {
+      this.audioLipSyncAnalyser.disconnect();
+      this.audioLipSyncAnalyser = null;
+    }
+
+    if (this.audioLipSyncElement) {
+      this.audioLipSyncElement.onended = null;
+      this.audioLipSyncElement.onerror = null;
+      this.audioLipSyncElement.pause();
+      this.audioLipSyncElement.src = '';
+      this.audioLipSyncElement.load();
+      this.audioLipSyncElement = null;
+    }
+
+    if (this.audioLipSyncContext) {
+      this.audioLipSyncContext.suspend().catch((error) => {
+        console.warn('Failed to suspend audio lip-sync context:', error);
+      });
+    }
+  }
+
+  private getOrCreateAudioLipSyncContext(): AudioContext {
+    if (this.audioLipSyncContext && this.audioLipSyncContext.state !== 'closed') {
+      return this.audioLipSyncContext;
+    }
+
+    const context = new AudioContext();
+    this.audioLipSyncContext = context;
+    return context;
   }
 
   private stepLipSyncFrame() {
@@ -388,6 +461,138 @@ export class AvatarRenderer {
     const totalDurationMs = Math.min(maxDurationMs, Math.max(minDurationMs, estimatedDurationMs));
     this.lipSyncStepMs = Math.max(minStepMs, totalDurationMs / chars.length);
     this.stepLipSyncFrame();
+  }
+
+  private mapAnalyserToHungarianViseme(
+    frequencyData: Uint8Array,
+    waveformData: Uint8Array,
+    sampleRate: number
+  ): LipSyncHeadPart | null {
+    let sumSquares = 0;
+    for (let index = 0; index < waveformData.length; index += 1) {
+      const sample = (waveformData[index] - 128) / 128;
+      sumSquares += sample * sample;
+    }
+    const rms = Math.sqrt(sumSquares / waveformData.length);
+    if (rms < audioLipSyncConfig.silenceRmsThreshold) {
+      return null;
+    }
+
+    const nyquist = sampleRate / 2;
+    const binWidthHz = nyquist / frequencyData.length;
+    const averageBand = (minHz: number, maxHz: number): number => {
+      const start = Math.max(0, Math.floor(minHz / binWidthHz));
+      const end = Math.min(frequencyData.length - 1, Math.ceil(maxHz / binWidthHz));
+      if (end < start) {
+        return 0;
+      }
+
+      let sum = 0;
+      let count = 0;
+      for (let index = start; index <= end; index += 1) {
+        sum += frequencyData[index];
+        count += 1;
+      }
+
+      return count > 0 ? sum / count : 0;
+    };
+
+    const low = averageBand(audioLipSyncConfig.bandsHz.low[0], audioLipSyncConfig.bandsHz.low[1]);
+    const mid = averageBand(audioLipSyncConfig.bandsHz.mid[0], audioLipSyncConfig.bandsHz.mid[1]);
+    const high = averageBand(audioLipSyncConfig.bandsHz.high[0], audioLipSyncConfig.bandsHz.high[1]);
+    const sibilant = averageBand(audioLipSyncConfig.bandsHz.sibilant[0], audioLipSyncConfig.bandsHz.sibilant[1]);
+    const total = Math.max(1, low + mid + high + sibilant);
+
+    const lowRatio = low / total;
+    const midRatio = mid / total;
+    const highRatio = high / total;
+    const sibilantRatio = sibilant / total;
+
+    if (
+      sibilantRatio > audioLipSyncConfig.ratios.sibilant &&
+      highRatio > audioLipSyncConfig.ratios.highForSibilant
+    ) {
+      return 'head_fv';
+    }
+
+    if (lowRatio > audioLipSyncConfig.ratios.lowRounded && rms > audioLipSyncConfig.rms.rounded) {
+      return 'head_ou';
+    }
+
+    if (
+      lowRatio > audioLipSyncConfig.ratios.lowOpen &&
+      midRatio > audioLipSyncConfig.ratios.midOpen &&
+      rms > audioLipSyncConfig.rms.open
+    ) {
+      return 'head_a';
+    }
+
+    if (midRatio > audioLipSyncConfig.ratios.midFront || highRatio > audioLipSyncConfig.ratios.highFront) {
+      return 'head_ei';
+    }
+
+    return 'head_consonant';
+  }
+
+  async playLipSyncAudio(audioSrc: string) {
+    if (!audioSrc) {
+      this.stopLipSync();
+      return;
+    }
+
+    this.stopLipSync();
+
+    const audioContext = this.getOrCreateAudioLipSyncContext();
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = audioLipSyncConfig.fftSize;
+    analyser.smoothingTimeConstant = audioLipSyncConfig.smoothing;
+
+    const audioElement = new Audio(audioSrc);
+    const source = audioContext.createMediaElementSource(audioElement);
+    source.connect(analyser);
+    analyser.connect(audioContext.destination);
+
+    this.audioLipSyncContext = audioContext;
+    this.audioLipSyncElement = audioElement;
+    this.audioLipSyncSource = source;
+    this.audioLipSyncAnalyser = analyser;
+
+    const frequencyData = new Uint8Array(analyser.frequencyBinCount);
+    const waveformData = new Uint8Array(analyser.fftSize);
+
+    const drive = () => {
+      const currentAnalyser = this.audioLipSyncAnalyser;
+      const currentContext = this.audioLipSyncContext;
+      const currentElement = this.audioLipSyncElement;
+      if (!currentAnalyser || !currentContext || !currentElement) {
+        return;
+      }
+
+      currentAnalyser.getByteFrequencyData(frequencyData);
+      currentAnalyser.getByteTimeDomainData(waveformData);
+      this.activeLipSyncHead = this.mapAnalyserToHungarianViseme(
+        frequencyData,
+        waveformData,
+        currentContext.sampleRate
+      );
+
+      if (!currentElement.paused && !currentElement.ended) {
+        this.audioLipSyncRafId = requestAnimationFrame(drive);
+      } else if (currentElement.ended) {
+        this.stopLipSync();
+      }
+    };
+
+    audioElement.onended = () => {
+      this.stopLipSync();
+    };
+    audioElement.onerror = () => {
+      this.stopLipSync();
+    };
+
+    await audioContext.resume();
+    await audioElement.play();
+    this.audioLipSyncRafId = requestAnimationFrame(drive);
   }
 
   private drawBackground() {
