@@ -139,6 +139,7 @@ export class AvatarRenderer {
   audioLipSyncSource: MediaElementAudioSourceNode | null = null;
   audioLipSyncAnalyser: AnalyserNode | null = null;
   audioLipSyncRafId: number | null = null;
+  audioPlaybackDoneResolver: (() => void) | null = null;
 
   // images
   images: Record<AvatarPart, HTMLImageElement | null> = {
@@ -353,6 +354,11 @@ export class AvatarRenderer {
   }
 
   private stopAudioDrivenLipSync() {
+    if (this.audioPlaybackDoneResolver) {
+      this.audioPlaybackDoneResolver();
+      this.audioPlaybackDoneResolver = null;
+    }
+
     if (this.audioLipSyncRafId !== null) {
       cancelAnimationFrame(this.audioLipSyncRafId);
       this.audioLipSyncRafId = null;
@@ -586,16 +592,36 @@ export class AvatarRenderer {
       }
     };
 
-    audioElement.onended = () => {
-      this.stopLipSync();
-    };
-    audioElement.onerror = () => {
-      this.stopLipSync();
-    };
+    await new Promise<void>(async (resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.audioPlaybackDoneResolver = null;
+        resolve();
+      };
 
-    await audioContext.resume();
-    await audioElement.play();
-    this.audioLipSyncRafId = requestAnimationFrame(drive);
+      this.audioPlaybackDoneResolver = finish;
+
+      audioElement.onended = () => {
+        this.stopLipSync();
+      };
+      audioElement.onerror = () => {
+        this.stopLipSync();
+      };
+
+      try {
+        await audioContext.resume();
+        await audioElement.play();
+        this.audioLipSyncRafId = requestAnimationFrame(drive);
+      } catch (error) {
+        this.audioPlaybackDoneResolver = null;
+        settled = true;
+        reject(error);
+      }
+    });
   }
 
   private drawBackground() {

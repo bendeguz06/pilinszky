@@ -1,15 +1,17 @@
 import base64
 import glob
+import json
 import os
 import re
 import tempfile
+from collections.abc import Generator
 
 import chromadb
 import requests
 import torch
 import torchaudio
 from fastapi import FastAPI
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from TTS.api import TTS  # new repo: https://github.com/idiap/coqui-ai-TTS
 
@@ -161,8 +163,7 @@ def embed(text: str) -> list[float]:
     return res.json()["embeddings"][0]
 
 
-@app.post("/chat")
-def chat(req: ChatRequest):
+def build_messages(req: ChatRequest) -> list[dict[str, str]]:
     query_embedding = embed(req.message)
     collection = get_collection()
     results = collection.query(
@@ -190,7 +191,47 @@ def chat(req: ChatRequest):
     for m in req.history:
         messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": req.message})
+    return messages
 
+
+def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
+    with requests.post(
+        f"{OLLAMA_URL}/api/chat",
+        json={
+            "model": LLM_MODEL,
+            "messages": messages,
+            "stream": True,
+            "options": {"num_ctx": 2048, "num_gpu": 49},
+        },
+        stream=True,
+        timeout=(10, 300),
+    ) as res:
+        res.raise_for_status()
+        for line in res.iter_lines():
+            if not line:
+                continue
+            chunk = json.loads(line)
+            token = chunk.get("message", {}).get("content", "")
+            if token:
+                yield token
+
+
+def should_flush_audio(buffer: str) -> bool:
+    stripped = buffer.rstrip()
+    return (
+        len(stripped) >= 120
+        or stripped.endswith((".", "!", "?", "…"))
+        or stripped.endswith("\n")
+    )
+
+
+def ndjson_event(payload: dict[str, str]) -> str:
+    return json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    messages = build_messages(req)
     res = requests.post(
         f"{OLLAMA_URL}/api/chat",
         json={
@@ -208,6 +249,45 @@ def chat(req: ChatRequest):
     wav_bytes = synthesize_text(tts_text)
 
     return {"reply": reply, "audio": base64.b64encode(wav_bytes).decode("utf-8")}
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest):
+    messages = build_messages(req)
+
+    def stream():
+        buffer = ""
+        full_reply = ""
+        try:
+            for token in llm_stream(messages):
+                full_reply += token
+                buffer += token
+                yield ndjson_event({"type": "text", "data": token})
+
+                if should_flush_audio(buffer):
+                    tts_text = buffer.replace("\n", " ").strip()
+                    if tts_text:
+                        wav_bytes = synthesize_text(tts_text)
+                        yield ndjson_event(
+                            {
+                                "type": "audio",
+                                "data": base64.b64encode(wav_bytes).decode("utf-8"),
+                            }
+                        )
+                    buffer = ""
+
+            remaining = buffer.replace("\n", " ").strip()
+            if remaining:
+                wav_bytes = synthesize_text(remaining)
+                yield ndjson_event(
+                    {"type": "audio", "data": base64.b64encode(wav_bytes).decode("utf-8")}
+                )
+
+            yield ndjson_event({"type": "done", "reply": full_reply})
+        except Exception as err:
+            yield ndjson_event({"type": "error", "error": str(err)})
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
 @app.post("/tts")

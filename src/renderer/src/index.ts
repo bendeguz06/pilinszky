@@ -40,6 +40,8 @@ let speechRecognitionStoppingDueToSilence = false;
 let speechRecognitionGotFinalResult = false;
 let isAwaitingResponse = false;
 let loadingMessageEl: HTMLDivElement | null = null;
+const pendingAudioChunks: string[] = [];
+let isPlayingQueuedAudio = false;
 
 const avatarStatusEl = document.createElement('div');
 avatarStatusEl.id = 'avatar-status';
@@ -551,24 +553,79 @@ function appendMessage(role: string, text: string) {
   el.textContent = text
   messagesEl.appendChild(el)
   messagesEl.scrollTop = messagesEl.scrollHeight
+  return el
+}
+
+async function playQueuedAudioChunks() {
+  if (isPlayingQueuedAudio) {
+    return;
+  }
+
+  const nextChunk = pendingAudioChunks.shift();
+  if (!nextChunk) {
+    return;
+  }
+
+  isPlayingQueuedAudio = true;
+  try {
+    await avatar.playLipSyncAudio(nextChunk);
+  } catch (err) {
+    console.error('Failed to play streamed audio chunk:', err);
+  } finally {
+    isPlayingQueuedAudio = false;
+    if (pendingAudioChunks.length > 0) {
+      void playQueuedAudioChunks();
+    }
+  }
+}
+
+function queueAudioChunk(audioSrc: string) {
+  if (!audioSrc) {
+    return;
+  }
+
+  pendingAudioChunks.push(audioSrc);
+  void playQueuedAudioChunks();
 }
 
 async function send() {
   const message = inputEl.value.trim()
   if (!message || isAwaitingResponse) return
 
+  pendingAudioChunks.length = 0;
   setRequestInFlight(true)
   setLoadingStatus('Pilinszky válaszol…')
   inputEl.value = ''
   appendMessage('user', message)
   history.push({ role: 'user', content: message })
+  let assistantMessageEl: HTMLDivElement | null = null
 
   try {
-    const { reply, audioSrc } = await window.pilinszky.chat(message, history)
+    let partialReply = ''
+    assistantMessageEl = appendMessage('assistant', '')
+
+    const reply = await window.pilinszky.chatStream(message, history, (event) => {
+      if (event.type === 'text') {
+        partialReply += event.data
+        assistantMessageEl.textContent = partialReply
+        messagesEl.scrollTop = messagesEl.scrollHeight
+        return
+      }
+
+      if (event.type === 'audio') {
+        queueAudioChunk(event.data)
+      }
+    })
+
     history.push({ role: 'assistant', content: reply })
-    appendMessage('assistant', reply)
-    void avatar.playLipSyncAudio(audioSrc)
+    if (!assistantMessageEl.textContent?.trim()) {
+      assistantMessageEl.textContent = reply
+      messagesEl.scrollTop = messagesEl.scrollHeight
+    }
   } catch (err) {
+    if (assistantMessageEl && !assistantMessageEl.textContent?.trim()) {
+      assistantMessageEl.remove()
+    }
     appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
     console.error(err)
   } finally {
