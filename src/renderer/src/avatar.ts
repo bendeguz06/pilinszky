@@ -592,7 +592,7 @@ export class AvatarRenderer {
       }
     };
 
-    await new Promise<void>(async (resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
       const finish = () => {
         if (settled) {
@@ -612,15 +612,17 @@ export class AvatarRenderer {
         this.stopLipSync();
       };
 
-      try {
-        await audioContext.resume();
-        await audioElement.play();
-        this.audioLipSyncRafId = requestAnimationFrame(drive);
-      } catch (error) {
-        this.audioPlaybackDoneResolver = null;
-        settled = true;
-        reject(error);
-      }
+      void audioContext
+        .resume()
+        .then(() => audioElement.play())
+        .then(() => {
+          this.audioLipSyncRafId = requestAnimationFrame(drive);
+        })
+        .catch((error) => {
+          this.audioPlaybackDoneResolver = null;
+          settled = true;
+          reject(error);
+        });
     });
   }
 
