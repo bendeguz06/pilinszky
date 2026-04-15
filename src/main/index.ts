@@ -17,6 +17,7 @@ dotenv.config()
 
 const POD_URL = process.env.POD_URL
 let speechClient: SpeechClient | null = null
+const activeChatStreamControllers = new Map<string, AbortController>()
 
 function getSpeechClient(): SpeechClient {
   if (speechClient) {
@@ -133,11 +134,15 @@ app.whenReady().then(() => {
     const sender = event.sender
 
     void (async () => {
+      const abortController = new AbortController()
+      activeChatStreamControllers.set(requestId, abortController)
+
       try {
         const response = await fetch(`${POD_URL}/chat/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          signal: abortController.signal
         })
 
         if (!response.ok || !response.body) {
@@ -191,16 +196,31 @@ app.whenReady().then(() => {
           sender.send('chat-stream-event', toIpcEvent(requestId, chunk))
         }
       } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          return
+        }
         sender.send('chat-stream-event', {
           requestId,
           type: 'error',
           error:
             error instanceof Error ? error.message : 'Unexpected error while streaming chat response'
         } satisfies ChatStreamIpcEvent)
+      } finally {
+        activeChatStreamControllers.delete(requestId)
       }
     })()
 
     return requestId
+  })
+
+  ipcMain.handle('chat-stream-cancel', async (_, requestId: string) => {
+    const controller = activeChatStreamControllers.get(requestId)
+    if (!controller) {
+      return false
+    }
+    controller.abort()
+    activeChatStreamControllers.delete(requestId)
+    return true
   })
 
   // Get TTS audio → return as base64 so renderer can play it

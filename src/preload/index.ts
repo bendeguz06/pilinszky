@@ -7,6 +7,20 @@ import type {
   TranscriptionPayload
 } from '../shared/types'
 
+const CHAT_STREAM_CANCELLED_ERROR = 'CHAT_STREAM_CANCELLED'
+let activeChatStreamRequestId: string | null = null
+let activeChatStreamReject: ((reason?: unknown) => void) | null = null
+let activeChatStreamListener: ((_: Electron.IpcRendererEvent, event: ChatStreamIpcEvent) => void) | null = null
+
+function cleanupActiveChatStreamListener() {
+  if (activeChatStreamListener) {
+    ipcRenderer.removeListener('chat-stream-event', activeChatStreamListener)
+  }
+  activeChatStreamListener = null
+  activeChatStreamRequestId = null
+  activeChatStreamReject = null
+}
+
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.
@@ -29,21 +43,30 @@ contextBridge.exposeInMainWorld('pilinszky', {
     history: Message[],
     onEvent: (event: ChatStreamClientEvent) => void
   ) => {
+    if (activeChatStreamRequestId) {
+      await ipcRenderer.invoke('chat-stream-cancel', activeChatStreamRequestId)
+      activeChatStreamReject?.(new Error(CHAT_STREAM_CANCELLED_ERROR))
+      cleanupActiveChatStreamListener()
+    }
+
     const requestId = await ipcRenderer.invoke('chat-stream-start', { message, history })
+    activeChatStreamRequestId = requestId
 
     return await new Promise<string>((resolve, reject) => {
+      activeChatStreamReject = reject
+
       const listener = (_: Electron.IpcRendererEvent, event: ChatStreamIpcEvent) => {
         if (event.requestId !== requestId) return
 
         if (event.type === 'error') {
-          ipcRenderer.removeListener('chat-stream-event', listener)
+          cleanupActiveChatStreamListener()
           onEvent({ type: 'error', error: event.error })
           reject(new Error(event.error))
           return
         }
 
         if (event.type === 'done') {
-          ipcRenderer.removeListener('chat-stream-event', listener)
+          cleanupActiveChatStreamListener()
           onEvent({ type: 'done', reply: event.reply })
           resolve(event.reply)
           return
@@ -52,8 +75,21 @@ contextBridge.exposeInMainWorld('pilinszky', {
         onEvent(event)
       }
 
+      activeChatStreamListener = listener
       ipcRenderer.on('chat-stream-event', listener)
     })
+  },
+
+  cancelActiveChatStream: async () => {
+    if (!activeChatStreamRequestId) {
+      return false
+    }
+
+    const requestId = activeChatStreamRequestId
+    const cancelled = await ipcRenderer.invoke('chat-stream-cancel', requestId)
+    activeChatStreamReject?.(new Error(CHAT_STREAM_CANCELLED_ERROR))
+    cleanupActiveChatStreamListener()
+    return Boolean(cancelled)
   },
 
   transcribe: (audio: ArrayBuffer, mimeType: string) => {

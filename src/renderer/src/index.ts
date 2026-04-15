@@ -5,6 +5,10 @@ const isDev = import.meta.env.DEV;
 const SILENCE_DETECTION_DURATION_MS = 600;
 const SILENCE_DETECTION_RMS_THRESHOLD = 0.02;
 const SILENCE_DETECTION_POLL_INTERVAL_MS = 100;
+const CHAT_STREAM_CANCELLED_ERROR = 'CHAT_STREAM_CANCELLED';
+const MIC_ICON_PATH =
+  'M12 15a4 4 0 0 0 4-4V7a4 4 0 1 0-8 0v4a4 4 0 0 0 4 4Zm7-4a1 1 0 1 0-2 0 5 5 0 1 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.93V21H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.07A7 7 0 0 0 19 11Z';
+const STOP_ICON_PATH = 'M7 7h10v10H7z';
 
 const history: Message[] = [];
 
@@ -13,6 +17,7 @@ const canvasPanelEl = document.querySelector<HTMLElement>("#canvas-panel")!;
 const inputEl = document.querySelector<HTMLInputElement>("#input")!;
 const sendBtn = document.querySelector<HTMLButtonElement>("#send")!;
 const micBtnEl = document.querySelector<HTMLButtonElement>("#mic-button")!;
+const micIconPathEl = document.querySelector<SVGPathElement>('#mic-icon path')!;
 const avatarCanvasEl = document.querySelector<HTMLCanvasElement>('#avatar-canvas')!
 
 type MicState = 'idle' | 'active' | 'blocked' | 'unsupported';
@@ -42,6 +47,8 @@ let isAwaitingResponse = false;
 let loadingMessageEl: HTMLDivElement | null = null;
 const pendingAudioChunks: string[] = [];
 let isPlayingQueuedAudio = false;
+let isCancellingAssistantOutput = false;
+let isStoppingAssistantOutput = false;
 
 const avatarStatusEl = document.createElement('div');
 avatarStatusEl.id = 'avatar-status';
@@ -175,7 +182,28 @@ function setMicState(state: MicState, title?: string) {
     unsupported: 'A böngésző környezet nem támogatja a beszédfelismerést'
   };
 
-  micBtnEl.title = title ?? defaultTitleByState[state];
+  const nextTitle = title ?? defaultTitleByState[state];
+  micBtnEl.title = nextTitle;
+  micBtnEl.setAttribute('aria-label', nextTitle);
+  refreshMicButtonMode();
+}
+
+function isAssistantOutputActive(): boolean {
+  return isAwaitingResponse || isPlayingQueuedAudio || pendingAudioChunks.length > 0;
+}
+
+function refreshMicButtonMode() {
+  const shouldShowStop = isAssistantOutputActive();
+  micBtnEl.dataset.mode = shouldShowStop ? 'stop' : 'mic';
+
+  if (shouldShowStop) {
+    micIconPathEl.setAttribute('d', STOP_ICON_PATH);
+    micBtnEl.title = 'Leállítás (hang és válaszgenerálás)';
+    micBtnEl.setAttribute('aria-label', 'Leállítás (hang és válaszgenerálás)');
+    return;
+  }
+
+  micIconPathEl.setAttribute('d', MIC_ICON_PATH);
 }
 
 function canUseRecorderTranscriptionFallback(): boolean {
@@ -218,6 +246,7 @@ function setRequestInFlight(isInFlight: boolean) {
   isAwaitingResponse = isInFlight;
   inputEl.disabled = isInFlight;
   sendBtn.disabled = isInFlight;
+  refreshMicButtonMode();
 
   if (!isInFlight) {
     setLoadingStatus(null);
@@ -567,12 +596,14 @@ async function playQueuedAudioChunks() {
   }
 
   isPlayingQueuedAudio = true;
+  refreshMicButtonMode();
   try {
     await avatar.playLipSyncAudio(nextChunk);
   } catch (err) {
     console.error('Failed to play streamed audio chunk:', err);
   } finally {
     isPlayingQueuedAudio = false;
+    refreshMicButtonMode();
     if (pendingAudioChunks.length > 0) {
       void playQueuedAudioChunks();
     }
@@ -585,14 +616,38 @@ function queueAudioChunk(audioSrc: string) {
   }
 
   pendingAudioChunks.push(audioSrc);
+  refreshMicButtonMode();
   void playQueuedAudioChunks();
+}
+
+async function stopAssistantOutput() {
+  if (isStoppingAssistantOutput) {
+    return;
+  }
+
+  isStoppingAssistantOutput = true;
+  try {
+    pendingAudioChunks.splice(0);
+    refreshMicButtonMode();
+    await avatar.playLipSyncAudio('');
+
+    if (isAwaitingResponse) {
+      isCancellingAssistantOutput = true;
+      await window.pilinszky.cancelActiveChatStream();
+    }
+  } finally {
+    isStoppingAssistantOutput = false;
+    refreshMicButtonMode();
+  }
 }
 
 async function send() {
   const message = inputEl.value.trim()
   if (!message || isAwaitingResponse) return
 
+  isCancellingAssistantOutput = false;
   pendingAudioChunks.splice(0);
+  refreshMicButtonMode();
   await avatar.playLipSyncAudio('');
   setRequestInFlight(true)
   setLoadingStatus('Pilinszky válaszol…')
@@ -623,12 +678,18 @@ async function send() {
       messagesEl.scrollTop = messagesEl.scrollHeight
     }
   } catch (err) {
+    const cancelled =
+      err instanceof Error &&
+      (err.message === CHAT_STREAM_CANCELLED_ERROR || isCancellingAssistantOutput);
     if (!assistantMessageEl.textContent?.trim()) {
       assistantMessageEl.remove()
     }
-    appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
-    console.error(err)
+    if (!cancelled) {
+      appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
+      console.error(err)
+    }
   } finally {
+    isCancellingAssistantOutput = false;
     setRequestInFlight(false)
     inputEl.focus()
   }
@@ -640,6 +701,11 @@ inputEl.addEventListener('keydown', (e) => {
 });
 
 micBtnEl.addEventListener('click', () => {
+  if (isAssistantOutputActive()) {
+    void stopAssistantOutput();
+    return;
+  }
+
   if (micState === 'unsupported') {
     return;
   }

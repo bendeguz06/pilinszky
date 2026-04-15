@@ -20,6 +20,7 @@ declare global {
             | { type: 'error'; error: string }
         ) => void
       ): Promise<string>
+      cancelActiveChatStream(): Promise<boolean>
       transcribe(audio: ArrayBuffer, mimeType: string): Promise<string>
     }
   }

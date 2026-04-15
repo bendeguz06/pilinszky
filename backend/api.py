@@ -39,6 +39,8 @@ SYSTEM_PROMPT = (
 
 XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
 AUDIO_FLUSH_CHAR_THRESHOLD = 120
+ELLIPSIS_TRIPLE_PLACEHOLDER = "__ELLIPSIS_TRIPLE__"
+ELLIPSIS_SINGLE_PLACEHOLDER = "__ELLIPSIS_SINGLE__"
 
 app = FastAPI()
 logger = logging.getLogger(__name__)
@@ -80,8 +82,14 @@ def get_tts():
 
 def split_into_chunks(text: str, limit: int = XTTS_CHAR_LIMIT) -> list[str]:
     """Split text into chunks under `limit` chars, breaking at sentence boundaries."""
-    # Split on sentence-ending punctuation, keeping the delimiter
-    sentences = re.split(r'(?<=[.!?…\u2014])\s+', text)
+    preserved = (
+        text.replace("...", ELLIPSIS_TRIPLE_PLACEHOLDER).replace(
+            "…", ELLIPSIS_SINGLE_PLACEHOLDER
+        )
+    )
+    # Split on sentence-ending punctuation, keeping the delimiter.
+    # Ellipses are preserved and handled as continuation, not hard boundary.
+    sentences = re.split(r"(?<=[.!?\u2014])\s+", preserved)
     chunks = []
     current = ""
     for sentence in sentences:
@@ -108,7 +116,13 @@ def split_into_chunks(text: str, limit: int = XTTS_CHAR_LIMIT) -> list[str]:
                 current = sentence
     if current:
         chunks.append(current)
-    return [c for c in chunks if c.strip()]
+    return [
+        c.replace(ELLIPSIS_TRIPLE_PLACEHOLDER, "...").replace(
+            ELLIPSIS_SINGLE_PLACEHOLDER, "…"
+        )
+        for c in chunks
+        if c.strip()
+    ]
 
 
 def synthesize_text(text: str) -> bytes:
@@ -221,6 +235,8 @@ def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
 
 def should_flush_audio(buffer: str) -> bool:
     stripped = buffer.rstrip()
+    if stripped.endswith("...") or stripped.endswith("…"):
+        return False
     return (
         len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
         or stripped.endswith((".", "!", "?", "…"))
