@@ -592,23 +592,20 @@ async function send() {
   const message = inputEl.value.trim()
   if (!message || isAwaitingResponse) return
 
-  pendingAudioChunks.length = 0;
+  pendingAudioChunks.splice(0);
+  await avatar.playLipSyncAudio('');
   setRequestInFlight(true)
   setLoadingStatus('Pilinszky válaszol…')
   inputEl.value = ''
   appendMessage('user', message)
   history.push({ role: 'user', content: message })
-  let assistantMessageEl: HTMLDivElement | null = null
+  const assistantMessageEl = appendMessage('assistant', '')
 
   try {
     let partialReply = ''
-    assistantMessageEl = appendMessage('assistant', '')
 
     const reply = await window.pilinszky.chatStream(message, history, (event) => {
       if (event.type === 'text') {
-        if (!assistantMessageEl) {
-          return
-        }
         partialReply += event.data
         assistantMessageEl.textContent = partialReply
         messagesEl.scrollTop = messagesEl.scrollHeight
@@ -626,7 +623,7 @@ async function send() {
       messagesEl.scrollTop = messagesEl.scrollHeight
     }
   } catch (err) {
-    if (assistantMessageEl && !assistantMessageEl.textContent?.trim()) {
+    if (!assistantMessageEl.textContent?.trim()) {
       assistantMessageEl.remove()
     }
     appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')

@@ -1,6 +1,7 @@
 import base64
 import glob
 import json
+import logging
 import os
 import re
 import tempfile
@@ -37,8 +38,10 @@ SYSTEM_PROMPT = (
 )
 
 XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
+AUDIO_FLUSH_CHAR_THRESHOLD = 120
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
 
 # ChromaDB client
 _chroma_collection = None
@@ -219,7 +222,7 @@ def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
 def should_flush_audio(buffer: str) -> bool:
     stripped = buffer.rstrip()
     return (
-        len(stripped) >= 120
+        len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
         or stripped.endswith((".", "!", "?", "…"))
         or stripped.endswith("\n")
     )
@@ -284,8 +287,11 @@ def chat_stream(req: ChatRequest):
                 )
 
             yield ndjson_event({"type": "done", "reply": full_reply})
-        except Exception as err:
-            yield ndjson_event({"type": "error", "error": str(err)})
+        except Exception:
+            logger.exception("Streaming chat pipeline failed")
+            yield ndjson_event(
+                {"type": "error", "error": "A válasz streamelése közben hiba történt."}
+            )
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
 

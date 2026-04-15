@@ -61,7 +61,14 @@ function toIpcEvent(requestId: string, chunk: ChatStreamServerEvent): ChatStream
   }
 
   if (chunk.type === 'done') {
-    return { requestId, type: 'done', reply: chunk.reply ?? '' }
+    if (chunk.reply === undefined || chunk.reply === null) {
+      return {
+        requestId,
+        type: 'error',
+        error: 'Streaming response completed without a final reply payload.'
+      }
+    }
+    return { requestId, type: 'done', reply: chunk.reply }
   }
 
   return { requestId, type: 'error', error: chunk.error ?? 'Unknown streaming error' }
@@ -153,14 +160,34 @@ app.whenReady().then(() => {
             const trimmed = line.trim()
             if (!trimmed) continue
 
-            const chunk = JSON.parse(trimmed) as ChatStreamServerEvent
+            let chunk: ChatStreamServerEvent
+            try {
+              chunk = JSON.parse(trimmed) as ChatStreamServerEvent
+            } catch {
+              sender.send('chat-stream-event', {
+                requestId,
+                type: 'error',
+                error: 'Received malformed streaming payload from backend.'
+              } satisfies ChatStreamIpcEvent)
+              continue
+            }
             sender.send('chat-stream-event', toIpcEvent(requestId, chunk))
           }
         }
 
         const tail = buffer.trim()
         if (tail) {
-          const chunk = JSON.parse(tail) as ChatStreamServerEvent
+          let chunk: ChatStreamServerEvent
+          try {
+            chunk = JSON.parse(tail) as ChatStreamServerEvent
+          } catch {
+            sender.send('chat-stream-event', {
+              requestId,
+              type: 'error',
+              error: 'Received malformed final streaming payload from backend.'
+            } satisfies ChatStreamIpcEvent)
+            return
+          }
           sender.send('chat-stream-event', toIpcEvent(requestId, chunk))
         }
       } catch (error) {
