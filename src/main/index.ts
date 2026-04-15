@@ -51,6 +51,22 @@ function getGoogleAudioEncodingFromMimeType(mimeType: string) {
   )
 }
 
+function toIpcEvent(requestId: string, chunk: ChatStreamServerEvent): ChatStreamIpcEvent {
+  if (chunk.type === 'text') {
+    return { requestId, type: 'text', data: chunk.data }
+  }
+
+  if (chunk.type === 'audio') {
+    return { requestId, type: 'audio', data: `data:audio/wav;base64,${chunk.data}` }
+  }
+
+  if (chunk.type === 'done') {
+    return { requestId, type: 'done', reply: chunk.reply ?? '' }
+  }
+
+  return { requestId, type: 'error', error: chunk.error ?? 'Unknown streaming error' }
+}
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -138,40 +154,14 @@ app.whenReady().then(() => {
             if (!trimmed) continue
 
             const chunk = JSON.parse(trimmed) as ChatStreamServerEvent
-            const payload: ChatStreamIpcEvent = {
-              requestId,
-              type: chunk.type
-            }
-
-            if (chunk.type === 'text' && chunk.data) {
-              payload.data = chunk.data
-            } else if (chunk.type === 'audio' && chunk.data) {
-              payload.data = `data:audio/wav;base64,${chunk.data}`
-            } else if (chunk.type === 'done') {
-              payload.reply = chunk.reply ?? ''
-            } else if (chunk.type === 'error') {
-              payload.error = chunk.error ?? 'Unknown streaming error'
-            }
-
-            sender.send('chat-stream-event', payload)
+            sender.send('chat-stream-event', toIpcEvent(requestId, chunk))
           }
         }
 
         const tail = buffer.trim()
         if (tail) {
           const chunk = JSON.parse(tail) as ChatStreamServerEvent
-          sender.send('chat-stream-event', {
-            requestId,
-            type: chunk.type,
-            data:
-              chunk.type === 'audio'
-                ? chunk.data
-                  ? `data:audio/wav;base64,${chunk.data}`
-                  : undefined
-                : chunk.data,
-            reply: chunk.type === 'done' ? chunk.reply : undefined,
-            error: chunk.type === 'error' ? chunk.error : undefined
-          } satisfies ChatStreamIpcEvent)
+          sender.send('chat-stream-event', toIpcEvent(requestId, chunk))
         }
       } catch (error) {
         sender.send('chat-stream-event', {
