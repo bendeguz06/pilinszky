@@ -59,6 +59,8 @@ SYSTEM_PROMPT = (
 )
 
 XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
+# Streaming flush thresholds are intentionally larger than XTTS_CHAR_LIMIT:
+# a flush batch is later split safely by split_into_chunks() before XTTS inference.
 AUDIO_MIN_FLUSH_CHAR_THRESHOLD = 280
 AUDIO_SOFT_FLUSH_CHAR_THRESHOLD = 180
 AUDIO_MAX_FLUSH_CHAR_THRESHOLD = 520
