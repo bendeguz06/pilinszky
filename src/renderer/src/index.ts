@@ -521,10 +521,10 @@ async function send() {
   history.push({ role: 'user', content: message })
 
   try {
-    const { reply, audio } = await window.pilinszky.chat(message, history)
+    const { reply, audioSrc } = await window.pilinszky.chat(message, history)
     history.push({ role: 'assistant', content: reply })
     appendMessage('assistant', reply)
-    void avatar.playLipSyncAudio(audio)
+    void avatar.playLipSyncAudio(audioSrc)
   } catch (err) {
     appendMessage('assistant', '[Hiba történt. Kérjük, próbálja újra.]')
     console.error(err)

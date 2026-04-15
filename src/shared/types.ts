@@ -12,3 +12,8 @@ export interface TranscriptionPayload {
   audioBase64: string
   mimeType: string
 }
+
+export interface ChatResponse {
+  reply: string
+  audio: string // base64-encoded WAV, no data URI prefix
+}

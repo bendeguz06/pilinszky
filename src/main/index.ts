@@ -4,7 +4,8 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import axios from 'axios'
 import { SpeechClient } from '@google-cloud/speech'
-import type { Message, TranscriptionPayload } from '../shared/types'
+import { autoUpdater } from 'electron-updater'
+import type { ChatResponse, Message, TranscriptionPayload } from '../shared/types'
 import * as dotenv from 'dotenv'
 dotenv.config()
 
@@ -81,7 +82,9 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.bb.pilinszky')
+  electronApp.setAppUserModelId('com.electron')
+
+  autoUpdater.checkForUpdatesAndNotify()
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -91,11 +94,22 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('chat', async (_, payload: { message: string; history: Message[] }) => {
-    const res = await axios.post(`${POD_URL}/chat`, payload)
-    return {
-      reply: res.data.reply as string,
-      audio: res.data.audio as string
-    }
+    const res = await axios.post<ChatResponse>(`${POD_URL}/chat`, payload)
+    const { reply, audio } = res.data
+    return { reply, audioSrc: `data:audio/wav;base64,${audio}` }
+  })
+
+  // Get TTS audio → return as base64 so renderer can play it
+  ipcMain.handle('speak', async (_, text: string) => {
+    const res = await axios.post(
+      `${POD_URL}/tts`,
+      { text },
+      {
+        responseType: 'arraybuffer'
+      }
+    )
+    const base64 = Buffer.from(res.data).toString('base64')
+    return `data:audio/wav;base64,${base64}`
   })
 
   ipcMain.handle('transcribe', async (_, payload: TranscriptionPayload) => {
