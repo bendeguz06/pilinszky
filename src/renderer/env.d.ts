@@ -46,8 +46,7 @@ interface SpeechRecognitionConstructor {
 
 interface Window {
   pilinszky: {
-    chat(message: string, history: import('../shared/types').Message[]): Promise<string>
-    speak(text: string): Promise<string>
+    chat(message: string, history: import('../shared/types').Message[]): Promise<{ reply: string; audio: string; }>
     transcribe(audio: ArrayBuffer, mimeType: string): Promise<string>
   }
   SpeechRecognition?: SpeechRecognitionConstructor

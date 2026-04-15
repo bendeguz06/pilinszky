@@ -23,9 +23,8 @@ if (process.contextIsolated) {
 }
 
 contextBridge.exposeInMainWorld('pilinszky', {
-  chat: (message: string, history: Message[]) => ipcRenderer.invoke('chat', { message, history }),
-
-  speak: (text: string) => ipcRenderer.invoke('speak', text),
+  chat: (message: string, history: Message[]): Promise<{ reply: string; audio: string; }> =>
+    ipcRenderer.invoke('chat', { message, history }),
 
   transcribe: (audio: ArrayBuffer, mimeType: string) => {
     const payload: TranscriptionPayload = {

@@ -1,6 +1,7 @@
 import glob
 import os
 import tempfile
+import base64
 
 import chromadb
 import requests
@@ -98,9 +99,9 @@ def embed(text: str) -> list[float]:
     res.raise_for_status()
     return res.json()["embeddings"][0]
 
-
 @app.post("/chat")
 def chat(req: ChatRequest):
+    # --- part 1: LLM ---
     query_embedding = embed(req.message)
     collection = get_collection()
     results = collection.query(
@@ -108,8 +109,10 @@ def chat(req: ChatRequest):
         n_results=TOP_K,
         include=["documents", "metadatas"],
     )
+
     docs = results["documents"][0] if results["documents"] else []
     metas = results["metadatas"][0] if results["metadatas"] else [{}] * len(docs)
+
     context_parts = []
     for doc, meta in zip(docs, metas):
         typ = meta.get("type", "")
@@ -118,11 +121,12 @@ def chat(req: ChatRequest):
             f"[{typ.upper()}: {title}]" if title else f"[{typ.upper()}]" if typ else ""
         )
         context_parts.append(f"{label}\n{doc}" if label else doc)
+
     context_text = "\n\n".join(context_parts)
 
     system_content = SYSTEM_PROMPT
     if context_text:
-        system_content += f"\n\nReleváns részletek saját írásaidból:\n{context_text}"
+        system_content += f"\n\nReleváns részletek:\n{context_text}"
 
     messages = [{"role": "system", "content": system_content}]
     for m in req.history:
@@ -141,20 +145,18 @@ def chat(req: ChatRequest):
     )
     res.raise_for_status()
     reply = res.json()["message"]["content"]
-    return {"reply": reply}
 
-
-@app.post("/tts")
-def tts(req: TTSRequest):
+    # --- part 2: TTS ---
     tts_model, gpt_cond_latent, speaker_embedding = get_tts()
 
-    text = req.text.replace("\n", " ").strip()
+    text = reply.replace("\n", " ").strip()
     out = tts_model.synthesizer.tts_model.inference(
         text=text,
         language="hu",
         gpt_cond_latent=gpt_cond_latent,
         speaker_embedding=speaker_embedding,
     )
+
     wav = torch.tensor(out["wav"]).unsqueeze(0)
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -166,4 +168,9 @@ def tts(req: TTSRequest):
     finally:
         os.unlink(tmp_path)
 
-    return Response(content=wav_bytes, media_type="audio/wav")
+    audio_base64 = base64.b64encode(wav_bytes).decode("utf-8")
+
+    return {
+        "reply": reply,
+        "audio": f"data:audio/wav;base64,{audio_base64}"
+    }

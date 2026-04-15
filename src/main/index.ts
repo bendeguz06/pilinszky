@@ -92,20 +92,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('chat', async (_, payload: { message: string; history: Message[] }) => {
     const res = await axios.post(`${POD_URL}/chat`, payload)
-    return res.data.reply as string
-  })
-
-  // Get TTS audio → return as base64 so renderer can play it
-  ipcMain.handle('speak', async (_, text: string) => {
-    const res = await axios.post(
-      `${POD_URL}/tts`,
-      { text },
-      {
-        responseType: 'arraybuffer'
-      }
-    )
-    const base64 = Buffer.from(res.data).toString('base64')
-    return `data:audio/wav;base64,${base64}`
+    return {
+      reply: res.data.reply as string,
+      audio: res.data.audio as string
+    }
   })
 
   ipcMain.handle('transcribe', async (_, payload: TranscriptionPayload) => {
