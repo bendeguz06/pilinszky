@@ -270,16 +270,21 @@ def should_flush_audio(buffer: str) -> bool:
         return False
     if stripped.endswith("...") or stripped.endswith("…"):
         return False
-    if len(stripped) >= AUDIO_MAX_FLUSH_CHAR_THRESHOLD:
+    stripped_len = len(stripped)
+    if stripped_len >= AUDIO_MAX_FLUSH_CHAR_THRESHOLD:
         return True
     sentence_matches = list(re.finditer(SENTENCE_BOUNDARY_PATTERN, stripped))
     sentence_count = len(sentence_matches)
-    ends_with_sentence_boundary = bool(
-        sentence_matches and not stripped[sentence_matches[-1].end():].strip()
+    trailing_after_last_sentence = (
+        stripped[sentence_matches[-1].end():] if sentence_matches else ""
     )
-    if ends_with_sentence_boundary and len(stripped) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD:
-        return True
-    if sentence_count >= AUDIO_MIN_SENTENCE_COUNT and len(stripped) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD:
+    ends_with_sentence_boundary = bool(
+        sentence_matches and not trailing_after_last_sentence.strip()
+    )
+    has_soft_length = stripped_len >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD
+    if has_soft_length and (
+        ends_with_sentence_boundary or sentence_count >= AUDIO_MIN_SENTENCE_COUNT
+    ):
         return True
     normalized = re.sub(r"\s+", " ", stripped).strip()
     return (
