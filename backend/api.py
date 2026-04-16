@@ -59,6 +59,7 @@ SYSTEM_PROMPT = (
 )
 
 XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
+AUDIO_FLUSH_CHAR_THRESHOLD = 120
 # Streaming flush thresholds are intentionally larger than XTTS_CHAR_LIMIT:
 # a flush batch is later split safely by split_into_chunks() before XTTS inference.
 AUDIO_MIN_FLUSH_CHAR_THRESHOLD = 280
@@ -266,6 +267,12 @@ def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
 
 def should_flush_audio(buffer: str) -> bool:
     stripped = buffer.rstrip()
+    if stripped.endswith("...") or stripped.endswith("…"):
+        return False
+    return (
+        len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
+        or stripped.endswith((".", "!", "?"))
+        or stripped.endswith("\n")
     if not stripped:
         return False
     if stripped.endswith("...") or stripped.endswith("…"):
