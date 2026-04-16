@@ -28,20 +28,46 @@ EMBED_MODEL = "nomic-embed-text"
 TOP_K = 3
 
 SYSTEM_PROMPT = (
-    "Te Pilinszky János vagy, a 20. századi magyar költő. "
-    "Töredékesen, mélyen és kontemplatívan válaszolj ahogy ő gondolkodott és írt. "
-    "Keresztény miszticizmus, csend, szenvedés és kegyelem hatja át szavaidat. "
-    "Beszélj mindig érthető magyarul. Ne használj nem természetes kifejezéseket."
-    "Ha releváns, hivatkozz saját verseidre vagy prózádra. "
-    "Mindig magyarul válaszolj, tömören, szinte aforisztikusan, mindig költői módon."
-    "Használj pontot, vesszőt, gondolatjelet a természetes szünetekhez. "
-    "Használj normálisan hosszú mondatokat. "
+    "Te Pilinszky János vagy, 20. századi magyar költő.\n"
+
+    "Válaszaid tömörek, visszafogottak és kontemplatívak.\n"
+    "Kerüld a túlmagyarázást. Inkább sejtess, mint kijelents.\n"
+
+    "Stílusjegyek:\n"
+    "- rövid vagy közepesen rövid mondatok\n"
+    "- egyszerű, tiszta szókincs\n"
+    "- kevés jelző, semmi dagályosság\n"
+    "- ismétlés és csend használata\n"
+    "- konkrét képek (test, tér, fény, sötétség)\n"
+
+    "Tematika:\n"
+    "- szenvedés, hiány, bűn, kegyelem\n"
+    "- keresztény misztika és transzcendencia\n"
+    "- emberi magány és Isten hallgatása\n"
+
+    "Beszédmód:\n"
+    "- mindig első személyben beszélsz\n"
+    "- nem magyarázod túl a gondolataidat\n"
+    "- nem használsz modern szlenget vagy technikai zsargont\n"
+
+    "Forma:\n"
+    "- magyarul válaszolsz\n"
+    "- tömören, akár aforisztikusan\n"
+    "- természetes írásjelek: pont, vessző, gondolatjel\n"
+
+    "Ha releváns, finoman utalhatsz saját műveid hangulatára, de nem idézel hosszasan.\n"
 )
 
 XTTS_CHAR_LIMIT = 220  # XTTS v2 hard limit per language chunk
-AUDIO_FLUSH_CHAR_THRESHOLD = 120
+# Streaming flush thresholds are intentionally larger than XTTS_CHAR_LIMIT:
+# a flush batch is later split safely by split_into_chunks() before XTTS inference.
+AUDIO_MIN_FLUSH_CHAR_THRESHOLD = 280
+AUDIO_SOFT_FLUSH_CHAR_THRESHOLD = 180
+AUDIO_MAX_FLUSH_CHAR_THRESHOLD = 520
+AUDIO_MIN_SENTENCE_COUNT = 2
 ELLIPSIS_TRIPLE_PLACEHOLDER = "__ELLIPSIS_TRIPLE__"
 ELLIPSIS_SINGLE_PLACEHOLDER = "__ELLIPSIS_SINGLE__"
+SENTENCE_BOUNDARY_PATTERN = r"[.!?](?=\s|$)"
 
 app = FastAPI()
 logger = logging.getLogger(__name__)
@@ -240,12 +266,30 @@ def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
 
 def should_flush_audio(buffer: str) -> bool:
     stripped = buffer.rstrip()
+    if not stripped:
+        return False
     if stripped.endswith("...") or stripped.endswith("…"):
         return False
+    stripped_len = len(stripped)
+    if stripped_len >= AUDIO_MAX_FLUSH_CHAR_THRESHOLD:
+        return True
+    sentence_matches = list(re.finditer(SENTENCE_BOUNDARY_PATTERN, stripped))
+    sentence_count = len(sentence_matches)
+    trailing_after_last_sentence = (
+        stripped[sentence_matches[-1].end():] if sentence_matches else ""
+    )
+    ends_with_sentence_boundary = bool(
+        sentence_matches and not trailing_after_last_sentence.strip()
+    )
+    has_soft_length = stripped_len >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD
+    if has_soft_length and (
+        ends_with_sentence_boundary or sentence_count >= AUDIO_MIN_SENTENCE_COUNT
+    ):
+        return True
+    normalized = re.sub(r"\s+", " ", stripped).strip()
     return (
-        len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
-        or stripped.endswith((".", "!", "?"))
-        or stripped.endswith("\n")
+        len(normalized) >= AUDIO_MIN_FLUSH_CHAR_THRESHOLD
+        or ("\n\n" in stripped and len(normalized) >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD)
     )
 
 
