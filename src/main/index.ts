@@ -251,7 +251,8 @@ app.whenReady().then(() => {
           languageCode: process.env.STT_LANGUAGE_CODE ?? 'hu-HU',
           model: process.env.STT_MODEL ?? 'latest_long',
           enableAutomaticPunctuation: true,
-          ...(hasValidConfiguredSampleRate ? { sampleRateHertz: configuredSampleRateHertz } : {})
+          ...(hasValidConfiguredSampleRate ? { sampleRateHertz: configuredSampleRateHertz } : {}),
+          useEnhanced: true
         }
       })
 
