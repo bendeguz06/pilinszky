@@ -50,7 +50,7 @@ cd backend
 docker compose up -d rag-api
 
 # pin deployment to a specific image tag
-RAG_API_IMAGE=ghcr.io/bendeguz06/pilinszky-rag-api:sha-<commit> docker compose up -d rag-api
+RAG_API_IMAGE=ghcr.io/bendeguz06/pilinszky-rag-api:sha-<shortsha> docker compose up -d rag-api
 
 # force full scrape+ingest once
 FORCE_INGEST=1 docker compose --profile ingest run --rm rag-ingest

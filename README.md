@@ -132,7 +132,7 @@ Other endpoints:
 
 ```bash
 cd backend
-RAG_API_IMAGE=ghcr.io/bendeguz06/pilinszky-rag-api:sha-<commit> docker compose up -d rag-api
+RAG_API_IMAGE=ghcr.io/bendeguz06/pilinszky-rag-api:sha-<shortsha> docker compose up -d rag-api
 ```
 
 ## Frontend development commands
