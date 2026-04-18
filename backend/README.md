@@ -8,7 +8,7 @@ FastAPI service providing RAG-augmented chat and XTTS v2 text-to-speech for the 
 Put `.txt` files (Pilinszky poems, essays, interviews) in `backend/corpus/`.
 
 ### 2. Place voice samples
-Put `.wav` recordings of the target voice in `backend/voice_samples/`.  
+Put `.wav` recordings of the target voice in `backend/voice_samples/`.
 XTTS v2 uses these as speaker references for cloning.
 
 ### 3. Pull Ollama models

@@ -14,9 +14,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         python3.12 \
         python3.12-venv \
+        python3.12-dev \
         python3-pip \
         ca-certificates \
-        ffmpeg && \
+        ffmpeg \
+        libavcodec-dev \
+        libavformat-dev \
+        libavutil-dev \
+        libswresample-dev \
+        libswscale-dev \
+        pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
 # Ensure python3 points to 3.12
