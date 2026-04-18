@@ -6,7 +6,11 @@ BACKEND_DIR="${BACKEND_DIR:-$WORKSPACE_DIR/backend}"
 VENV_DIR="${VENV_DIR:-/workspace/venv}"
 UVICORN_HOST="${UVICORN_HOST:-0.0.0.0}"
 UVICORN_PORT="${UVICORN_PORT:-8000}"
-INGEST_MARKER="${INGEST_MARKER:-$BACKEND_DIR/.ingested}"
+ENTRYPOINT_MODE="${ENTRYPOINT_MODE:-api}"
+RUN_INGEST_ON_START="${RUN_INGEST_ON_START:-0}"
+INGEST_MARKER="${INGEST_MARKER:-$BACKEND_DIR/chroma_db/.ingested}"
+FORCE_INGEST="${FORCE_INGEST:-0}"
+SKIP_INGEST="${SKIP_INGEST:-0}"
 
 cd "$BACKEND_DIR"
 
@@ -40,16 +44,43 @@ else:
     )
 PY
 
-# Prepare the corpus and vector store once, then persist through the compose volume.
-if [[ ! -f "$INGEST_MARKER" ]]; then
-  python scrape_corpus.py & pid1=$!
-  python scrape_interviews.py & pid2=$!
+run_ingest_tasks() {
+  # Prepare the corpus and vector store once, then persist through the compose volume.
+  if [[ "$SKIP_INGEST" == "1" ]]; then
+    echo "SKIP_INGEST=1 -> skipping scrape/ingest startup tasks"
+    return
+  fi
 
-  wait $pid1 || exit 1
-  wait $pid2 || exit 1
+  if [[ "$FORCE_INGEST" == "1" || ! -f "$INGEST_MARKER" ]]; then
+    mkdir -p "$(dirname "$INGEST_MARKER")"
 
-  python ingest.py
-  touch "$INGEST_MARKER"
-fi
+    python scrape_corpus.py & pid1=$!
+    python scrape_interviews.py & pid2=$!
 
-exec python -m uvicorn api:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
+    wait $pid1 || exit 1
+    wait $pid2 || exit 1
+
+    python ingest.py
+    touch "$INGEST_MARKER"
+  else
+    echo "Found ingest marker at $INGEST_MARKER -> skipping scrape/ingest"
+  fi
+}
+
+case "$ENTRYPOINT_MODE" in
+  ingest)
+    run_ingest_tasks
+    ;;
+  api)
+    if [[ "$RUN_INGEST_ON_START" == "1" ]]; then
+      run_ingest_tasks
+    else
+      echo "ENTRYPOINT_MODE=api and RUN_INGEST_ON_START=0 -> skipping startup ingest"
+    fi
+    exec python -m uvicorn api:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
+    ;;
+  *)
+    echo "Unsupported ENTRYPOINT_MODE='$ENTRYPOINT_MODE' (expected: api | ingest)" >&2
+    exit 1
+    ;;
+esac
