@@ -267,32 +267,39 @@ def llm_stream(messages: list[dict[str, str]]) -> Generator[str, None, None]:
 
 def should_flush_audio(buffer: str) -> bool:
     stripped = buffer.rstrip()
-    if stripped.endswith("...") or stripped.endswith("…"):
-        return False
-    return (
-        len(stripped) >= AUDIO_FLUSH_CHAR_THRESHOLD
-        or stripped.endswith((".", "!", "?"))
-        or stripped.endswith("\n")
+
     if not stripped:
         return False
+
+    # Do not flush if we are in the middle of an ellipsis
     if stripped.endswith("...") or stripped.endswith("…"):
         return False
+
     stripped_len = len(stripped)
+
+    # 1. Hard limit: if it's too long, flush regardless of punctuation
     if stripped_len >= AUDIO_MAX_FLUSH_CHAR_THRESHOLD:
         return True
+
+    # 2. Check for sentence boundaries
     sentence_matches = list(re.finditer(SENTENCE_BOUNDARY_PATTERN, stripped))
     sentence_count = len(sentence_matches)
+
     trailing_after_last_sentence = (
         stripped[sentence_matches[-1].end():] if sentence_matches else ""
     )
     ends_with_sentence_boundary = bool(
         sentence_matches and not trailing_after_last_sentence.strip()
     )
+
+    # 3. Flush if we have reached a soft length and have enough sentences/proper ending
     has_soft_length = stripped_len >= AUDIO_SOFT_FLUSH_CHAR_THRESHOLD
     if has_soft_length and (
         ends_with_sentence_boundary or sentence_count >= AUDIO_MIN_SENTENCE_COUNT
     ):
         return True
+
+    # 4. Fallback for newlines or minimum length thresholds
     normalized = re.sub(r"\s+", " ", stripped).strip()
     return (
         len(normalized) >= AUDIO_MIN_FLUSH_CHAR_THRESHOLD

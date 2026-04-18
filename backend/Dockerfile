@@ -1,17 +1,46 @@
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:13.1.1-runtime-ubuntu24.04
 
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y python3.11 python3.11-venv && \
-    python3.11 -m ensurepip --upgrade && \
+ENV DEBIAN_FRONTEND=noninteractive \
+    WORKSPACE_DIR=/workspace/pilinszky \
+    BACKEND_DIR=/workspace/pilinszky/backend \
+    VENV_DIR=/workspace/venv \
+    PYTHONUNBUFFERED=1 \
+    COQUI_TOS_AGREED=1
+
+WORKDIR /workspace
+
+# System dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.12 \
+        python3.12-venv \
+        python3-pip \
+        ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Ensure python3 points to 3.12
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python3
 
-COPY requirements.txt .
-RUN python3.11 -m pip install --no-cache-dir --timeout 300 -r requirements.txt
+# --- Dependency layer (cached unless requirements change) ---
+WORKDIR $BACKEND_DIR
 
-ENV COQUI_TOS_AGREED=1
+COPY requirements.txt requirements-local.txt ./
 
+ENV PATH="$VENV_DIR/bin:$PATH"
+
+RUN python3 -m venv "$VENV_DIR" && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --timeout 300 \
+        -r requirements.txt \
+        -r requirements-local.txt
+
+# --- Application code  ---
 COPY . .
 
-CMD ["python3.11", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+# Entrypoint
+COPY docker-entrypoint.sh /usr/local/bin/backend-entrypoint.sh
+RUN chmod +x /usr/local/bin/backend-entrypoint.sh
+
+EXPOSE 8000
+
+CMD ["/usr/local/bin/backend-entrypoint.sh"]
