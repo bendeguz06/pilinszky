@@ -27,7 +27,8 @@ services:
       - pilinszky-net
 
   rag-api:
-    build: .
+    build:
+      context: .
     image: ${RAG_API_IMAGE:-ghcr.io/bendeguz06/pilinszky-rag-api:latest}
     pull_policy: if_not_present
     restart: unless-stopped
@@ -52,7 +53,8 @@ services:
     gpus: all
 
   rag-ingest:
-    build: .
+    build:
+      context: .
     image: ${RAG_API_IMAGE:-ghcr.io/bendeguz06/pilinszky-rag-api:latest}
     pull_policy: if_not_present
     restart: 'no'
